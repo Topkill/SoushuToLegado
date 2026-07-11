@@ -9,6 +9,7 @@ to enrich metadata for web-source books.
 from __future__ import annotations
 
 import argparse
+import re
 import json
 import shutil
 import sqlite3
@@ -142,6 +143,7 @@ class CompanionMeta:
     cover_url: str = ""
     latest_chapter_title: str = ""
     total_chapter_num: int = 0
+    chapters_text: str = ""
 
 
 def parse_args() -> argparse.Namespace:
@@ -440,6 +442,65 @@ def count_chapters(text: str) -> int:
     return sum(1 for line in text.splitlines() if line.strip())
 
 
+def chapter_lines(text: str) -> list[str]:
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def chapter_title_at(text: str, index: int) -> str:
+    lines = chapter_lines(text)
+    if index < 0 or index >= len(lines):
+        return ""
+    title, _, _ = lines[index].partition("#*#")
+    return title.strip()
+
+
+def parse_position_value(value: str) -> tuple[int, int]:
+    """Parse positions10.xml value like '12@0#0:0.0%'.
+
+    chapter index is 0-based: reading chapter 1 => 0.
+    """
+    text = clean_text(value)
+    if not text:
+        return 0, 0
+    head, _, _ = text.partition(":")
+    chapter_part, _, rest = head.partition("@")
+    _, _, pos_part = rest.partition("#")
+    return to_int(chapter_part, 0), to_int(pos_part, 0)
+
+
+def read_source_positions(backup: BackupFiles) -> dict[str, tuple[int, int]]:
+    real_name = find_real_name_by_suffix(backup, "/shared_prefs/positions10.xml")
+    if real_name is None:
+        return {}
+    text = read_plain_backup_text(backup, real_name)
+    positions: dict[str, tuple[int, int]] = {}
+    for match in re.finditer(
+        r'<string\s+name="([^"]+)">([^<]*)</string>',
+        text,
+        flags=re.I,
+    ):
+        key = norm_real_name(match.group(1))
+        positions[key] = parse_position_value(match.group(2))
+    return positions
+
+
+def read_source_last_read(backup: BackupFiles) -> tuple[str, int]:
+    """Return (lastFile, lastReadTime) from options1002.xml if present."""
+    real_name = find_real_name_by_suffix(backup, "/shared_prefs/options1002.xml")
+    if real_name is None:
+        return "", 0
+    text = read_plain_backup_text(backup, real_name)
+    last_file = ""
+    last_read_time = 0
+    m_file = re.search(r'<string\s+name="lastFile">([^<]*)</string>', text, flags=re.I)
+    if m_file:
+        last_file = clean_text(m_file.group(1))
+    m_time = re.search(r'<long\s+name="lastReadTime"\s+value="([^"]+)"\s*/>', text, flags=re.I)
+    if m_time:
+        last_read_time = to_long(m_time.group(1), 0)
+    return last_file, last_read_time
+
+
 def read_wbpub_meta(backup: BackupFiles, filename: str) -> CompanionMeta:
     book_dir = posix_dirname(filename)
     source_key = read_companion_text(backup, filename)
@@ -460,6 +521,7 @@ def read_wbpub_meta(backup: BackupFiles, filename: str) -> CompanionMeta:
             read_companion_text(backup, f"{source_dir}/.latestc")
         ),
         total_chapter_num=count_chapters(chapters),
+        chapters_text=chapters,
     )
 
 
@@ -526,6 +588,9 @@ def row_to_book(
     backup: BackupFiles,
     group_ids: dict[str, int],
     sequence: int,
+    positions: dict[str, tuple[int, int]],
+    last_file: str,
+    last_read_time: int,
 ) -> dict[str, Any]:
     """Build one legado Book JSON object.
 
@@ -540,6 +605,10 @@ def row_to_book(
     add_time = to_long(row["addTime"], 0)
     order = -sequence
     category = clean_text(row["category"])
+    dur_chapter_index, dur_chapter_pos = positions.get(norm_real_name(filename), (0, 0))
+    dur_chapter_time = add_time
+    if last_file and norm_real_name(last_file) == norm_real_name(filename) and last_read_time > 0:
+        dur_chapter_time = last_read_time
 
     if is_wbpub_book(row):
         meta = read_wbpub_meta(backup, filename)
@@ -547,9 +616,9 @@ def row_to_book(
             "author": meta.author,
             "bookUrl": meta.detail_url,
             "canUpdate": True,
-            "durChapterIndex": 0,
-            "durChapterPos": 0,
-            "durChapterTime": add_time,
+            "durChapterIndex": dur_chapter_index,
+            "durChapterPos": dur_chapter_pos,
+            "durChapterTime": dur_chapter_time,
             "group": group_ids[favorite],
             "lastCheckCount": 0,
             "lastCheckTime": add_time,
@@ -571,6 +640,9 @@ def row_to_book(
             book["kind"] = category
         if meta.latest_chapter_title:
             book["latestChapterTitle"] = meta.latest_chapter_title
+        dur_title = chapter_title_at(meta.chapters_text, dur_chapter_index)
+        if dur_title:
+            book["durChapterTitle"] = dur_title
         return book
 
     local_name = file_name_from_path(filename)
@@ -582,9 +654,9 @@ def row_to_book(
         "author": local_author,
         "bookUrl": filename,
         "canUpdate": True,
-        "durChapterIndex": 0,
-        "durChapterPos": 0,
-        "durChapterTime": add_time,
+        "durChapterIndex": dur_chapter_index,
+        "durChapterPos": dur_chapter_pos,
+        "durChapterTime": dur_chapter_time,
         "group": group_ids[favorite],
         "lastCheckCount": 0,
         "lastCheckTime": add_time,
@@ -715,8 +787,18 @@ def run() -> int:
         rows = read_books_rows(db_path)
         shelf_names = read_source_shelf_names(backup)
         groups, group_ids = build_groups(rows, shelf_names)
+        positions = read_source_positions(backup)
+        last_file, last_read_time = read_source_last_read(backup)
         books = [
-            row_to_book(row, backup, group_ids, sequence)
+            row_to_book(
+                row,
+                backup,
+                group_ids,
+                sequence,
+                positions,
+                last_file,
+                last_read_time,
+            )
             for sequence, row in enumerate(rows, start=1)
         ]
         search_history = build_search_history(read_source_search_history(backup))

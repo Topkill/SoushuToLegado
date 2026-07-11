@@ -205,6 +205,37 @@ com.flyersoft.seekbooks/shared_prefs/web_book_search
 
 源 `history.txt` 不是书籍搜索历史。测试样本里的 `shared_prefs/history.txt` 是本地打开/导入过的文件路径。
 
+## 阅读进度映射
+
+源 APK：
+
+```text
+shared_prefs/positions10.xml
+```
+
+格式：
+
+```text
+文件路径小写 = "章节索引@分段#位置:百分比"
+```
+
+例子：
+
+```text
+/sdcard/books/soushu/.books/斗破苍穹(天蚕土豆)/斗破苍穹.wbpub = 12@0#0:0.0%
+```
+
+规则：
+
+- 章节索引从 `0` 开始：读到第 1 章是 `0`，读到第 13 章是 `12`
+- `durChapterIndex` <- 章节索引
+- `durChapterPos` <- `#` 后的位置
+- `durChapterTitle` <- `.chapters` 中对应索引的章节名
+- 若 `options1002.xml` 的 `lastFile` 命中该书，则：
+  - `durChapterTime` <- `lastReadTime`
+- 否则：
+  - `durChapterTime` <- `books.addTime`
+
 ## addTime 映射
 
 源 APK：
