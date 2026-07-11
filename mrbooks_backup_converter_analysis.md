@@ -61,7 +61,7 @@ com.flyersoft.seekbooks/shared_prefs/shelf_names.txt
 - 每本书的 `Book.group` 写入它所属书架对应的 `groupId`。
 - 如果 `favorite` 为空，目标 `groupName` 也为空，不写“未分组”之类的兜底名。
 - 源自定义分组的 `bookSort` 保持 legado 默认值 `-1`。
-- 每本书的 `order` 按源 `books._id` 排序后的顺序从 `1` 递增，保证同一书架内按源书架顺序显示。
+- 每本书的 `order` 按源 `books._id` 排序后模拟 legado 新加入书架：写成 `-1, -2, -3...`。
 
 legado-E 自带分组是负数 ID，例如 `全部(-1)`、`本地(-2)`、`网络未分组(-4)` 等；用户自己创建的书架分组使用正数位标记。代码里的 `BookGroupDao.getUnusedId()` 从 `1L` 开始，每次左移一位，所以新增分组就是 `1, 2, 4, 8...` 这种序列。
 
