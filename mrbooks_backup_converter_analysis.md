@@ -205,6 +205,34 @@ com.flyersoft.seekbooks/shared_prefs/web_book_search
 
 源 `history.txt` 不是书籍搜索历史。测试样本里的 `shared_prefs/history.txt` 是本地打开/导入过的文件路径。
 
+## addTime 映射
+
+源 APK：
+
+```text
+mrbooks.db.books.addTime
+```
+
+含义：加入书架时间。
+
+legado `Book` **没有**同名或专用“加入时间”字段。现有时间字段语义是：
+
+- `latestChapterTime`：最新章节标题更新时间
+- `lastCheckTime`：最近一次更新/检查书籍信息的时间
+- `durChapterTime`：最近一次阅读书籍的时间（打开正文时间）
+
+本地书导入时，legado 会把文件时间写到 `latestChapterTime`；新建 `Book` 时另外两个时间字段也会落在创建时刻附近。
+
+因此当前转换把源 `addTime` 映射为：
+
+```text
+latestChapterTime = books.addTime
+lastCheckTime     = books.addTime
+durChapterTime    = books.addTime
+```
+
+这表示“这本书在 addTime 这个时刻进入书架”，不是宣称已经找到真实上次阅读进度。
+
 ## 缺失字段策略
 
 legado 恢复 `bookshelf.json` 时用普通 Gson，缺失字段不会可靠落到 Kotlin 默认值。
@@ -222,7 +250,13 @@ legado 恢复 `bookshelf.json` 时用普通 Gson，缺失字段不会可靠落�
   - `group`: 对应自定义分组位标记
   - `tocUrl`: 无目录页时 `""`
   - `lastCheckCount` / `durChapterIndex` / `durChapterPos` / `originOrder`: `0`
-  - `latestChapterTime` / `lastCheckTime` / `durChapterTime`: 用 `books.addTime`
+  - 时间字段：legado 没有单独的“加入时间”字段
+  - 源 `books.addTime`（加入书架时间）映射到：
+    - `latestChapterTime = addTime`
+    - `lastCheckTime = addTime`
+    - `durChapterTime = addTime`
+  - 原因：legado 新建/加入书架时，这三项时间通常都会被写成创建时刻；源 APK 没有更精确的上次阅读/检查时间时，用 `addTime` 模拟“在该时刻加入书架”
+  - 注意：这不是真实“上次阅读时间”映射；真实阅读进度另算
 
 ## 当前脚本
 

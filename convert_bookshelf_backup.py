@@ -534,6 +534,9 @@ def row_to_book(
     """
     filename = clean_text(row["filename"])
     favorite = clean_text(row["favorite"])
+    # Source books.addTime is shelf-add time. Legado has no dedicated addTime field;
+    # newly created books fill latestChapterTime/lastCheckTime/durChapterTime at creation,
+    # so map addTime into those three as "added at this time".
     add_time = to_long(row["addTime"], 0)
     order = -sequence
     category = clean_text(row["category"])
