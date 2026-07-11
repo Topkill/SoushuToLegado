@@ -205,7 +205,27 @@ com.flyersoft.seekbooks/shared_prefs/web_book_search
 
 源 `history.txt` 不是书籍搜索历史。测试样本里的 `shared_prefs/history.txt` 是本地打开/导入过的文件路径。
 
+## 缺失字段策略
+
+legado 恢复 `bookshelf.json` 时用普通 Gson，缺失字段不会可靠落到 Kotlin 默认值。
+
+因此转换规则是：
+
+- 有源数据：写源值
+- 无源数据 + 可空可选：省略
+  - 如 `readConfig`、`variable`、`charset`、`wordCount`、空的 `intro/kind/coverUrl`
+- 无源数据 + 影响恢复语义：写合理显式值
+  - `type`: 网络书 `8`，本地 txt `264`
+  - `origin`: 网络书源 key，本地书 `loc_book`
+  - `canUpdate`: `true`
+  - `order`: `-1,-2,-3...`
+  - `group`: 对应自定义分组位标记
+  - `tocUrl`: 无目录页时 `""`
+  - `lastCheckCount` / `durChapterIndex` / `durChapterPos` / `originOrder`: `0`
+  - `latestChapterTime` / `lastCheckTime` / `durChapterTime`: 用 `books.addTime`
+
 ## 当前脚本
+
 
 脚本路径：
 

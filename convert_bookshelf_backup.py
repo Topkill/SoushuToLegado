@@ -527,6 +527,11 @@ def row_to_book(
     group_ids: dict[str, int],
     sequence: int,
 ) -> dict[str, Any]:
+    """Build one legado Book JSON object.
+
+    Critical status fields are always written with explicit values.
+    Optional nullable fields are only included when source data exists.
+    """
     filename = clean_text(row["filename"])
     favorite = clean_text(row["favorite"])
     add_time = to_long(row["addTime"], 0)
@@ -535,66 +540,68 @@ def row_to_book(
 
     if is_wbpub_book(row):
         meta = read_wbpub_meta(backup, filename)
-        return {
-            "bookUrl": meta.detail_url,
-            "tocUrl": "",
-            "origin": meta.source_key,
-            "originName": meta.source_name,
-            "name": meta.name,
+        book: dict[str, Any] = {
             "author": meta.author,
-            "kind": category or None,
-            "coverUrl": meta.cover_url or None,
-            "intro": meta.intro or None,
-            "charset": None,
-            "type": BOOK_TYPE_TEXT,
-            "group": group_ids[favorite],
-            "latestChapterTitle": meta.latest_chapter_title or None,
-            "latestChapterTime": add_time,
-            "lastCheckTime": add_time,
-            "lastCheckCount": 0,
-            "totalChapterNum": meta.total_chapter_num,
-            "durChapterTitle": None,
+            "bookUrl": meta.detail_url,
+            "canUpdate": True,
             "durChapterIndex": 0,
             "durChapterPos": 0,
             "durChapterTime": add_time,
-            "wordCount": None,
-            "canUpdate": True,
+            "group": group_ids[favorite],
+            "lastCheckCount": 0,
+            "lastCheckTime": add_time,
+            "latestChapterTime": add_time,
+            "name": meta.name,
             "order": order,
+            "origin": meta.source_key,
+            "originName": meta.source_name,
             "originOrder": 0,
-            "variable": None,
-            "readConfig": None,
+            "tocUrl": "",
+            "totalChapterNum": meta.total_chapter_num,
+            "type": BOOK_TYPE_TEXT,
         }
+        if meta.cover_url:
+            book["coverUrl"] = meta.cover_url
+        if meta.intro:
+            book["intro"] = meta.intro
+        if category:
+            book["kind"] = category
+        if meta.latest_chapter_title:
+            book["latestChapterTitle"] = meta.latest_chapter_title
+        return book
 
     local_name = file_name_from_path(filename)
-    return {
+    local_author = clean_local_text_marker(row["author"])
+    local_kind = clean_local_text_marker(category)
+    local_cover = clean_text(row["coverFile"])
+    local_intro = text_value(row["description"])
+    book = {
+        "author": local_author,
         "bookUrl": filename,
-        "tocUrl": "",
-        "origin": LOCAL_ORIGIN,
-        "originName": local_name,
-        "name": clean_text(row["book"]),
-        "author": clean_local_text_marker(row["author"]),
-        "kind": clean_local_text_marker(category) or None,
-        "coverUrl": clean_text(row["coverFile"]) or None,
-        "intro": text_value(row["description"]) or None,
-        "charset": None,
-        "type": BOOK_TYPE_LOCAL_TEXT,
-        "group": group_ids[favorite],
-        "latestChapterTitle": None,
-        "latestChapterTime": add_time,
-        "lastCheckTime": add_time,
-        "lastCheckCount": 0,
-        "totalChapterNum": 0,
-        "durChapterTitle": None,
+        "canUpdate": True,
         "durChapterIndex": 0,
         "durChapterPos": 0,
         "durChapterTime": add_time,
-        "wordCount": None,
-        "canUpdate": True,
+        "group": group_ids[favorite],
+        "lastCheckCount": 0,
+        "lastCheckTime": add_time,
+        "latestChapterTime": add_time,
+        "name": clean_text(row["book"]),
         "order": order,
+        "origin": LOCAL_ORIGIN,
+        "originName": local_name,
         "originOrder": 0,
-        "variable": None,
-        "readConfig": None,
+        "tocUrl": "",
+        "totalChapterNum": 0,
+        "type": BOOK_TYPE_LOCAL_TEXT,
     }
+    if local_cover:
+        book["coverUrl"] = local_cover
+    if local_intro:
+        book["intro"] = local_intro
+    if local_kind:
+        book["kind"] = local_kind
+    return book
 
 
 def omit_none(value: Any) -> Any:
