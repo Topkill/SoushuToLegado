@@ -6,6 +6,7 @@ Design goals:
 - Append import-only books after existing ones.
 - Remap import group bits with bookGroup merge mapping (final groupIds).
 - Same name+author as an existing book: skip import (protect Legado).
+- Reassign appended books order = min(existing.order) - 1, -2, ... (Legado add-book style).
 - Report skipped duplicates so the user can see what was not appended.
 """
 
@@ -176,6 +177,23 @@ def extract_positive_bits(group_value: int) -> list[int]:
     return bits
 
 
+
+def min_existing_order(books: list[dict[str, Any]]) -> int:
+    """Mirror Legado bookDao.minOrder for reassignment of appended books.
+
+    If there are no existing books or no usable order values, start from 0 so the
+    first appended book becomes -1.
+    """
+    orders: list[int] = []
+    for book in books:
+        if "order" not in book or book.get("order") is None:
+            continue
+        orders.append(as_int(book.get("order"), "order", default=0))
+    if not orders:
+        return 0
+    return min(orders)
+
+
 def remap_group(group_value: int, group_id_map: dict[int, int]) -> int:
     """Remap custom positive bits; leave non-positive values unchanged."""
     if group_value <= 0:
@@ -247,8 +265,16 @@ def merge_bookshelf(
                 }
             )
         book["group"] = new_group
+        # Placeholder; final order assigned after all skips are known, in append order.
         appended.append(book)
         seen_name_author.add(key)
+
+    # Match Legado LocalBook: new book order = minOrder - 1, then continue decreasing.
+    next_order = min_existing_order(existing) - 1
+    for book in appended:
+        old_order = book.get("order")
+        book["order"] = next_order
+        next_order -= 1
 
     merged = existing + appended
     summary = {
@@ -264,6 +290,7 @@ def merge_bookshelf(
                 "author": as_text(book.get("author")),
                 "bookUrl": as_text(book.get("bookUrl")),
                 "group": as_int(book.get("group"), "group", default=0),
+                "order": as_int(book.get("order"), "order", default=0),
             }
             for book in appended
         ],
@@ -306,6 +333,7 @@ def main() -> int:
             "duplicateMatch": "exact name+author",
             "duplicateAction": "skip_import_keep_existing",
             "importGroup": "remap via groupIdMap final groupIds",
+            "appendedOrder": "min(existing.order)-1, -2, ...",
             "fieldMerge": "none",
         },
         "groupIdMap": {str(k): v for k, v in sorted(group_id_map.items())},
@@ -334,7 +362,7 @@ def main() -> int:
             author = item["author"] or "(empty author)"
             print(
                 f"  + {item['name']} / {author} "
-                f"group={item['group']} url={item['bookUrl']}"
+                f"group={item['group']} order={item['order']} url={item['bookUrl']}"
             )
 
     return 0
