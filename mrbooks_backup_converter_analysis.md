@@ -231,11 +231,11 @@ shared_prefs/positions10.xml
 - `durChapterIndex` <- 章节索引
 - `durChapterPos` <- `#` 后的位置
 - `durChapterTitle` <- `.chapters` 中对应索引的章节名
-- `durChapterTime` 优先按 `history.txt` 最近打开顺序生成递减时间戳，使 legado “按阅读时间”排序与源一致：
-  - `history[0]` / `lastFile` <- `lastReadTime`（若无则回退合理 base）
-  - `history[1]` <- base - 1
-  - `history[2]` <- base - 2
-  - …
+- `durChapterTime` 严格按 `history.txt` 最近打开顺序生成，使 legado “按阅读时间”排序与源一致：
+  - `history[0]` / `lastFile` <- `lastReadTime`（有则用）；否则该本 `statistics.dates` 最后一天；再否则 `addTime` / 合理 fallback
+  - 后续 history 项若有 `statistics.dates`：`min(dates时间, 上一本时间 - 1)`
+  - 后续 history 项若无 `statistics.dates`：`上一本时间 - 1`
+  - 这样有/无 dates 都能保证 history 顺序不乱，同时尽量贴近真实阅读日
 - `history.txt` 未出现的书：
   - `durChapterTime` <- `books.addTime`
 
@@ -349,4 +349,4 @@ legado内置分组: 6
 
 同名书籍的 `readTime` 会相加，`lastRead` 取较大值，以贴合 legado 按书名汇总的行为。
 
-注意：`history.txt` 递减时间戳只用于书架 `durChapterTime` 排序，**不得**写入 `readRecord.lastRead`。
+注意：history 顺序锚点 / `prev-1` 补洞只用于书架 `durChapterTime` 排序，**不得**写入 `readRecord.lastRead`。

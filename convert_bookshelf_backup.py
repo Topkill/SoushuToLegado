@@ -683,16 +683,20 @@ def build_dur_chapter_times(
     history_files: list[str],
     last_file: str,
     last_read_time: int,
+    dates_by_file: dict[str, int] | None = None,
 ) -> dict[str, int]:
     """Map book filename -> durChapterTime.
 
     Source "sort by recent read" uses history.txt order, not per-book timestamps.
-    To make legado bookshelfSort=0 match that order:
+    history order is the hard rule; statistics.dates only anchors timestamps:
 
-    - history[0] = lastReadTime (or fallback base)
-    - history[1] = base - 1
-    - history[2] = base - 2
-    - books absent from history keep books.addTime
+    - history[0]: lastReadTime if present, else dates day, else addTime/fallback
+    - later history items with dates: min(dates, previous - 1)
+    - later history items without dates: previous - 1
+    - books absent from history: books.addTime
+
+    This keeps legado bookshelfSort=0 order aligned with source while using
+    real reading days when available.
     """
     times: dict[str, int] = {}
     add_times: dict[str, int] = {}
@@ -702,11 +706,7 @@ def build_dur_chapter_times(
             continue
         add_times[norm_real_name(filename)] = to_long(row["addTime"], 0)
 
-    base = last_read_time
-    if base <= 0:
-        base = max(add_times.values(), default=0)
-    if base <= 0:
-        base = int(time.time() * 1000)
+    date_times = dates_by_file or {}
 
     # Ensure lastFile is treated as most recent when history is empty/missing it.
     ordered: list[str] = []
@@ -723,13 +723,65 @@ def build_dur_chapter_times(
         ordered.append(path)
         seen.add(key)
 
+    fallback_first = last_read_time
+    if fallback_first <= 0:
+        anchors = [
+            value
+            for key in (norm_real_name(path) for path in ordered)
+            for value in (date_times.get(key, 0), add_times.get(key, 0))
+            if value > 0
+        ]
+        fallback_first = max(anchors, default=0)
+    if fallback_first <= 0:
+        fallback_first = max(add_times.values(), default=0)
+    if fallback_first <= 0:
+        fallback_first = int(time.time() * 1000)
+
+    last_file_key = norm_real_name(last_file) if last_file else ""
+    previous_time = 0
     for index, path in enumerate(ordered):
-        times[norm_real_name(path)] = base - index
+        key = norm_real_name(path)
+        dates_ts = date_times.get(key, 0)
+        add_time = add_times.get(key, 0)
+
+        if index == 0:
+            if last_file_key and key == last_file_key and last_read_time > 0:
+                current = last_read_time
+            elif dates_ts > 0:
+                current = dates_ts
+            elif add_time > 0:
+                current = add_time
+            else:
+                current = fallback_first
+        elif dates_ts > 0:
+            current = min(dates_ts, previous_time - 1)
+        else:
+            current = previous_time - 1
+
+        times[key] = max(current, 0)
+        previous_time = times[key]
 
     for key, add_time in add_times.items():
         if key not in times:
             times[key] = add_time
     return times
+
+
+def build_dates_by_file(stats_rows: list[sqlite3.Row]) -> dict[str, int]:
+    """filename -> last reading-day timestamp from statistics.dates."""
+    result: dict[str, int] = {}
+    for row in stats_rows:
+        filename = clean_text(row["filename"])
+        if not filename:
+            continue
+        ts = last_day_timestamp_from_dates(text_value(row["dates"]))
+        if ts <= 0:
+            continue
+        key = norm_real_name(filename)
+        prev = result.get(key, 0)
+        if ts > prev:
+            result[key] = ts
+    return result
 
 
 def read_wbpub_meta(backup: BackupFiles, filename: str) -> CompanionMeta:
@@ -832,8 +884,8 @@ def row_to_book(
     # Source books.addTime is shelf-add time. Legado has no dedicated addTime field;
     # newly created books fill latestChapterTime/lastCheckTime/durChapterTime at creation,
     # so map addTime into those three as "added at this time".
-    # durChapterTime is special: history.txt order is expanded into decreasing timestamps
-    # so legado "sort by recent read" matches source.
+    # durChapterTime is special: history.txt order is hard rule; statistics.dates
+    # only anchors timestamps so legado "sort by recent read" matches source.
     add_time = to_long(row["addTime"], 0)
     order = -sequence
     category = clean_text(row["category"])
@@ -1036,11 +1088,14 @@ def run() -> int:
         positions = read_source_positions(backup)
         last_file, last_read_time = read_source_last_read(backup)
         history_files = read_source_history_files(backup)
+        stats_rows = read_statistics_rows(db_path)
+        dates_by_file = build_dates_by_file(stats_rows)
         dur_chapter_times = build_dur_chapter_times(
             rows,
             history_files,
             last_file,
             last_read_time,
+            dates_by_file,
         )
         books = [
             row_to_book(
@@ -1055,7 +1110,7 @@ def run() -> int:
         ]
         search_history = build_search_history(read_source_search_history(backup))
         read_records = build_read_records(
-            read_statistics_rows(db_path),
+            stats_rows,
             rows,
             last_file,
             last_read_time,
