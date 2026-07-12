@@ -501,6 +501,80 @@ def read_source_last_read(backup: BackupFiles) -> tuple[str, int]:
     return last_file, last_read_time
 
 
+def read_source_history_files(backup: BackupFiles) -> list[str]:
+    """Return recent-open file paths from history.txt, most recent first."""
+    real_name = find_real_name_by_suffix(backup, "/shared_prefs/history.txt")
+    if real_name is None:
+        return []
+    text = read_plain_backup_text(backup, real_name)
+    files: list[str] = []
+    seen: set[str] = set()
+    for line in text.splitlines():
+        path = clean_text(line)
+        if not path:
+            continue
+        key = norm_real_name(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        files.append(path)
+    return files
+
+
+def build_dur_chapter_times(
+    rows: list[sqlite3.Row],
+    history_files: list[str],
+    last_file: str,
+    last_read_time: int,
+) -> dict[str, int]:
+    """Map book filename -> durChapterTime.
+
+    Source "sort by recent read" uses history.txt order, not per-book timestamps.
+    To make legado bookshelfSort=0 match that order:
+
+    - history[0] = lastReadTime (or fallback base)
+    - history[1] = base - 1
+    - history[2] = base - 2
+    - books absent from history keep books.addTime
+    """
+    times: dict[str, int] = {}
+    add_times: dict[str, int] = {}
+    for row in rows:
+        filename = clean_text(row["filename"])
+        if not filename:
+            continue
+        add_times[norm_real_name(filename)] = to_long(row["addTime"], 0)
+
+    base = last_read_time
+    if base <= 0:
+        base = max(add_times.values(), default=0)
+    if base <= 0:
+        base = int(time.time() * 1000)
+
+    # Ensure lastFile is treated as most recent when history is empty/missing it.
+    ordered: list[str] = []
+    seen: set[str] = set()
+    if last_file:
+        key = norm_real_name(last_file)
+        if key in add_times and key not in seen:
+            ordered.append(last_file)
+            seen.add(key)
+    for path in history_files:
+        key = norm_real_name(path)
+        if key not in add_times or key in seen:
+            continue
+        ordered.append(path)
+        seen.add(key)
+
+    for index, path in enumerate(ordered):
+        times[norm_real_name(path)] = base - index
+
+    for key, add_time in add_times.items():
+        if key not in times:
+            times[key] = add_time
+    return times
+
+
 def read_wbpub_meta(backup: BackupFiles, filename: str) -> CompanionMeta:
     book_dir = posix_dirname(filename)
     source_key = read_companion_text(backup, filename)
@@ -589,8 +663,7 @@ def row_to_book(
     group_ids: dict[str, int],
     sequence: int,
     positions: dict[str, tuple[int, int]],
-    last_file: str,
-    last_read_time: int,
+    dur_chapter_times: dict[str, int],
 ) -> dict[str, Any]:
     """Build one legado Book JSON object.
 
@@ -602,13 +675,13 @@ def row_to_book(
     # Source books.addTime is shelf-add time. Legado has no dedicated addTime field;
     # newly created books fill latestChapterTime/lastCheckTime/durChapterTime at creation,
     # so map addTime into those three as "added at this time".
+    # durChapterTime is special: history.txt order is expanded into decreasing timestamps
+    # so legado "sort by recent read" matches source.
     add_time = to_long(row["addTime"], 0)
     order = -sequence
     category = clean_text(row["category"])
     dur_chapter_index, dur_chapter_pos = positions.get(norm_real_name(filename), (0, 0))
-    dur_chapter_time = add_time
-    if last_file and norm_real_name(last_file) == norm_real_name(filename) and last_read_time > 0:
-        dur_chapter_time = last_read_time
+    dur_chapter_time = dur_chapter_times.get(norm_real_name(filename), add_time)
 
     if is_wbpub_book(row):
         meta = read_wbpub_meta(backup, filename)
@@ -789,6 +862,13 @@ def run() -> int:
         groups, group_ids = build_groups(rows, shelf_names)
         positions = read_source_positions(backup)
         last_file, last_read_time = read_source_last_read(backup)
+        history_files = read_source_history_files(backup)
+        dur_chapter_times = build_dur_chapter_times(
+            rows,
+            history_files,
+            last_file,
+            last_read_time,
+        )
         books = [
             row_to_book(
                 row,
@@ -796,8 +876,7 @@ def run() -> int:
                 group_ids,
                 sequence,
                 positions,
-                last_file,
-                last_read_time,
+                dur_chapter_times,
             )
             for sequence, row in enumerate(rows, start=1)
         ]

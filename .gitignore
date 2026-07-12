@@ -2,6 +2,7 @@
 /*
 # Track scripts and docs only
 !convert_bookshelf_backup.py
+!README.md
 !backup_restore_analysis.md
 !legado_backup_compatibility_analysis.md
 !mrbooks_backup_converter_analysis.md

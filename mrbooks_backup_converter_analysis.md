@@ -231,9 +231,12 @@ shared_prefs/positions10.xml
 - `durChapterIndex` <- 章节索引
 - `durChapterPos` <- `#` 后的位置
 - `durChapterTitle` <- `.chapters` 中对应索引的章节名
-- 若 `options1002.xml` 的 `lastFile` 命中该书，则：
-  - `durChapterTime` <- `lastReadTime`
-- 否则：
+- `durChapterTime` 优先按 `history.txt` 最近打开顺序生成递减时间戳，使 legado “按阅读时间”排序与源一致：
+  - `history[0]` / `lastFile` <- `lastReadTime`（若无则回退合理 base）
+  - `history[1]` <- base - 1
+  - `history[2]` <- base - 2
+  - …
+- `history.txt` 未出现的书：
   - `durChapterTime` <- `books.addTime`
 
 ## addTime 映射
