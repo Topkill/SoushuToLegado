@@ -55,8 +55,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "-o",
         "--output",
-        required=True,
-        help="output merged Legado backup zip path",
+        default="legado-merged.zip",
+        help="output merged Legado backup zip path (default: legado-merged.zip)",
     )
     parser.add_argument(
         "--group-name-conflict",
