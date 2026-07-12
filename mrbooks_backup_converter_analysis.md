@@ -326,3 +326,23 @@ legado内置分组: 6
 .wbpub书源书籍: 3
 真正本地书籍: 1
 ```
+
+
+## 阅读记录映射
+
+源：`mrbooks.db/statistics`
+
+| 源字段 | 目标 `readRecord.json` | 精度 |
+|---|---|---|
+| `books.book` / 路径推导书名 | `bookName` | 可用；同名会合并 |
+| `usedTime` | `readTime` | 较准确（累计阅读时长） |
+| `history`/`durChapterTime` / `dates` 最后一天 / `addTime` | `lastRead` | 近似 |
+| — | `deviceId` | 固定 `""` |
+
+不转换：
+
+- `readWords`
+- `dates` 全量按天明细
+- 阅读速度
+
+同名书籍的 `readTime` 会相加，`lastRead` 取较大值，以贴合 legado 按书名汇总的行为。

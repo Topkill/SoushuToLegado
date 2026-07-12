@@ -19,6 +19,7 @@ import time
 import zipfile
 import zlib
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -326,6 +327,154 @@ def read_books_rows(db_path: Path) -> list[sqlite3.Row]:
     """
     with sqlite_connect_ro(db_path) as conn:
         return conn.execute(sql).fetchall()
+
+
+def read_statistics_rows(db_path: Path) -> list[sqlite3.Row]:
+    """Return statistics rows if the table exists; empty list otherwise."""
+    with sqlite_connect_ro(db_path) as conn:
+        row = conn.execute(
+            "select 1 from sqlite_master where type='table' and name='statistics'"
+        ).fetchone()
+        if row is None:
+            return []
+        return conn.execute(
+            """
+            select filename, usedTime, readWords, dates
+            from statistics
+            order by _id asc
+            """
+        ).fetchall()
+
+
+def clean_book_display_name(value: Any) -> str:
+    """Normalize source books.book values like '书名#@#别名'."""
+    text_value_ = clean_text(value)
+    if not text_value_:
+        return ""
+    name, sep, _ = text_value_.partition("#@#")
+    return name.strip() if sep else text_value_
+
+
+def book_name_from_filename(filename: str) -> str:
+    """Best-effort book title from a source file path."""
+    path = filename.replace("\\", "/")
+    stem = PurePosixPath(path).stem
+    if not stem:
+        return ""
+    # Prefer parent folder "书名(作者)" when present.
+    parent = PurePosixPath(path).parent.name
+    if parent and parent not in {".", ""}:
+        if "(" in parent:
+            return parent.split("(", 1)[0].strip() or stem
+        return parent
+    return stem
+
+
+def last_day_timestamp_from_dates(dates_text: str) -> int:
+    """Convert statistics.dates last day-number into epoch millis at local midnight.
+
+    dates lines look like: 20646|6542@734
+    day number is days since 1970-01-01.
+    """
+    last_day = 0
+    for line in text_value(dates_text).splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        day_part, _, _ = line.partition("|")
+        day = to_int(day_part, 0)
+        if day > last_day:
+            last_day = day
+    if last_day <= 0:
+        return 0
+    try:
+        day_date = date(1970, 1, 1) + timedelta(days=last_day)
+        # Use UTC midnight; exact hour is unavailable from day-only source data.
+        return int(
+            datetime(
+                day_date.year,
+                day_date.month,
+                day_date.day,
+                tzinfo=timezone.utc,
+            ).timestamp()
+            * 1000
+        )
+    except (OverflowError, ValueError, OSError):
+        return 0
+
+
+def build_read_records(
+    stats_rows: list[sqlite3.Row],
+    book_rows: list[sqlite3.Row],
+    dur_chapter_times: dict[str, int],
+) -> list[dict[str, Any]]:
+    """Map source statistics -> legado readRecord.json items.
+
+    Precise:
+      - readTime <- statistics.usedTime (accumulated reading duration)
+      - bookName <- books.book (fallback: path-derived title)
+    Approximate:
+      - lastRead <- durChapterTime (history order) if known,
+                   else last day in statistics.dates,
+                   else books.addTime
+    """
+    meta_by_file: dict[str, tuple[str, int]] = {}
+    for row in book_rows:
+        filename = clean_text(row["filename"])
+        if not filename:
+            continue
+        name = clean_book_display_name(row["book"]) or book_name_from_filename(filename)
+        add_time = to_long(row["addTime"], 0)
+        meta_by_file[norm_real_name(filename)] = (name, add_time)
+
+    # Aggregate by bookName because legado groups statistics by book name.
+    aggregated: dict[str, dict[str, int]] = {}
+    for row in stats_rows:
+        filename = clean_text(row["filename"])
+        if not filename:
+            continue
+        read_time = to_long(row["usedTime"], 0)
+        if read_time <= 0:
+            continue
+
+        key = norm_real_name(filename)
+        if key in meta_by_file:
+            book_name, add_time = meta_by_file[key]
+        else:
+            book_name = book_name_from_filename(filename)
+            add_time = 0
+        if not book_name:
+            continue
+
+        last_read = dur_chapter_times.get(key, 0)
+        if last_read <= 0:
+            last_read = last_day_timestamp_from_dates(text_value(row["dates"]))
+        if last_read <= 0:
+            last_read = add_time
+
+        item = aggregated.get(book_name)
+        if item is None:
+            aggregated[book_name] = {
+                "readTime": read_time,
+                "lastRead": last_read,
+            }
+        else:
+            item["readTime"] += read_time
+            if last_read > item["lastRead"]:
+                item["lastRead"] = last_read
+
+    records = [
+        {
+            "bookName": book_name,
+            "deviceId": "",
+            "lastRead": values["lastRead"],
+            "readTime": values["readTime"],
+        }
+        for book_name, values in aggregated.items()
+    ]
+    records.sort(key=lambda item: (-item["readTime"], item["bookName"]))
+    return records
+
 
 
 def to_int(value: Any, default: int = 0) -> int:
@@ -765,6 +914,7 @@ def write_output_zip(
     books: list[dict[str, Any]],
     groups: list[dict[str, Any]],
     search_history: list[dict[str, Any]],
+    read_records: list[dict[str, Any]],
 ) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -781,6 +931,11 @@ def write_output_zip(
                 "searchHistory.json",
                 json.dumps(search_history, ensure_ascii=False, indent=2, sort_keys=True),
             )
+        if read_records:
+            zf.writestr(
+                "readRecord.json",
+                json.dumps(read_records, ensure_ascii=False, indent=2, sort_keys=True),
+            )
 
 
 def write_report(
@@ -792,6 +947,7 @@ def write_report(
     books: list[dict[str, Any]],
     groups: list[dict[str, Any]],
     search_history: list[dict[str, Any]],
+    read_records: list[dict[str, Any]],
 ) -> None:
     wbpub_count = sum(1 for row in rows if is_wbpub_book(row))
     local_count = len(rows) - wbpub_count
@@ -806,6 +962,7 @@ def write_report(
         f"- 自定义书架/分组数量：{len(custom_groups)}",
         f"- legado 内置分组数量：{len(groups) - len(custom_groups)}",
         f"- 搜索历史数量：{len(search_history)}",
+        f"- 阅读记录数量：{len(read_records)}",
         f"- .wbpub 书源书籍：{wbpub_count}",
         f"- 真正本地书籍：{local_count}",
         "",
@@ -825,6 +982,14 @@ def write_report(
         lines.extend(["", "## 搜索历史", ""])
         for item in search_history:
             lines.append(f"- `{item['word']}`")
+    if read_records:
+        lines.extend(["", "## 阅读记录", ""])
+        for item in read_records[:50]:
+            lines.append(
+                f"- `{item['bookName']}`：readTime={item['readTime']}，lastRead={item['lastRead']}"
+            )
+        if len(read_records) > 50:
+            lines.append(f"- ... 其余 {len(read_records) - 50} 条省略")
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -881,7 +1046,12 @@ def run() -> int:
             for sequence, row in enumerate(rows, start=1)
         ]
         search_history = build_search_history(read_source_search_history(backup))
-        write_output_zip(output_path, books, groups, search_history)
+        read_records = build_read_records(
+            read_statistics_rows(db_path),
+            rows,
+            dur_chapter_times,
+        )
+        write_output_zip(output_path, books, groups, search_history, read_records)
         if report_path:
             write_report(
                 report_path,
@@ -892,6 +1062,7 @@ def run() -> int:
                 books,
                 groups,
                 search_history,
+                read_records,
             )
 
         wbpub_count = sum(1 for row in rows if is_wbpub_book(row))
@@ -901,6 +1072,7 @@ def run() -> int:
         print(f"自定义书架/分组: {custom_group_count}")
         print(f"legado内置分组: {len(groups) - custom_group_count}")
         print(f"搜索历史: {len(search_history)}")
+        print(f"阅读记录: {len(read_records)}")
         print(f".wbpub书源书籍: {wbpub_count}")
         print(f"真正本地书籍: {len(books) - wbpub_count}")
         if report_path:
