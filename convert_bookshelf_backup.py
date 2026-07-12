@@ -406,17 +406,21 @@ def last_day_timestamp_from_dates(dates_text: str) -> int:
 def build_read_records(
     stats_rows: list[sqlite3.Row],
     book_rows: list[sqlite3.Row],
-    dur_chapter_times: dict[str, int],
+    last_file: str,
+    last_read_time: int,
 ) -> list[dict[str, Any]]:
     """Map source statistics -> legado readRecord.json items.
 
     Precise:
       - readTime <- statistics.usedTime (accumulated reading duration)
       - bookName <- books.book (fallback: path-derived title)
-    Approximate:
-      - lastRead <- durChapterTime (history order) if known,
-                   else last day in statistics.dates,
-                   else books.addTime
+      - lastRead for the single global lastFile <- options lastReadTime
+
+    Approximate / fallback for lastRead (do NOT use history decreasing stamps):
+      1) lastFile + lastReadTime, only for that one book
+      2) last day in statistics.dates (day-level real reading day)
+      3) books.addTime
+      4) 0
     """
     meta_by_file: dict[str, tuple[str, int]] = {}
     for row in book_rows:
@@ -426,6 +430,8 @@ def build_read_records(
         name = clean_book_display_name(row["book"]) or book_name_from_filename(filename)
         add_time = to_long(row["addTime"], 0)
         meta_by_file[norm_real_name(filename)] = (name, add_time)
+
+    last_file_key = norm_real_name(last_file) if last_file else ""
 
     # Aggregate by bookName because legado groups statistics by book name.
     aggregated: dict[str, dict[str, int]] = {}
@@ -446,11 +452,13 @@ def build_read_records(
         if not book_name:
             continue
 
-        last_read = dur_chapter_times.get(key, 0)
-        if last_read <= 0:
+        # Only the globally last-opened book has a real millisecond timestamp.
+        if last_file_key and key == last_file_key and last_read_time > 0:
+            last_read = last_read_time
+        else:
             last_read = last_day_timestamp_from_dates(text_value(row["dates"]))
-        if last_read <= 0:
-            last_read = add_time
+            if last_read <= 0:
+                last_read = add_time
 
         item = aggregated.get(book_name)
         if item is None:
@@ -1049,7 +1057,8 @@ def run() -> int:
         read_records = build_read_records(
             read_statistics_rows(db_path),
             rows,
-            dur_chapter_times,
+            last_file,
+            last_read_time,
         )
         write_output_zip(output_path, books, groups, search_history, read_records)
         if report_path:

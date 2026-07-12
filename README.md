@@ -190,7 +190,11 @@ Legado 里可能只能看到书名等信息，打不开正文。
 
 阅读时长会尽量转换到 `readRecord.json`：
 - `usedTime` → `readTime`（较准确）
-- `lastRead` 只能近似，不是精确“最后一次打开时间”
+- `lastRead`：
+  - 全局最近一本可用 `lastFile`/`lastReadTime`（较准）
+  - 其他书用 `statistics.dates` 最后一天（只有日期）
+  - 再没有才用加入时间
+  - **不用** history 递减时间戳
 - 阅读速度、按天明细、累计字数不转换
 
 ### 10. 不能保证“导入就能接着在线看”

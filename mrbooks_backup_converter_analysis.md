@@ -336,7 +336,9 @@ legado内置分组: 6
 |---|---|---|
 | `books.book` / 路径推导书名 | `bookName` | 可用；同名会合并 |
 | `usedTime` | `readTime` | 较准确（累计阅读时长） |
-| `history`/`durChapterTime` / `dates` 最后一天 / `addTime` | `lastRead` | 近似 |
+| `lastFile` + `lastReadTime`（仅全局最近一本） | `lastRead` | 较准确（毫秒） |
+| `statistics.dates` 最后一天 | `lastRead` | 天级真实阅读日 |
+| `books.addTime` | `lastRead` | 垫底；无阅读日时使用 |
 | — | `deviceId` | 固定 `""` |
 
 不转换：
@@ -346,3 +348,5 @@ legado内置分组: 6
 - 阅读速度
 
 同名书籍的 `readTime` 会相加，`lastRead` 取较大值，以贴合 legado 按书名汇总的行为。
+
+注意：`history.txt` 递减时间戳只用于书架 `durChapterTime` 排序，**不得**写入 `readRecord.lastRead`。
