@@ -6,6 +6,7 @@
 !merge_search_history.py
 !merge_read_record.py
 !merge_bookshelf.py
+!merge_legado_backup.py
 !README.md
 !backup_restore_analysis.md
 !legado_backup_compatibility_analysis.md
