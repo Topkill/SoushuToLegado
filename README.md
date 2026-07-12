@@ -104,6 +104,44 @@ python convert_bookshelf_backup.py "ssds.backup" -o "legado-bookshelf.zip" --rep
 
 ---
 
+
+---
+
+## 已经有 Legado 数据时：用合并脚本
+
+转换脚本生成的是一份**精简备份**（主要是书架、分组、搜索历史、阅读时长）。  
+如果你在 Legado 里**已经用了一段时间**，直接恢复这份小备份，很容易把原来的书源、主题、已有书架弄乱。
+
+这时请用 **`merge/` 目录里的合并脚本**：
+
+> 以你现在的 Legado 备份为底，把搜书大师转出来的内容**并进去**。
+
+### 什么时候用合并？
+
+- **Legado 几乎是空的**：只跑转换，直接导入 `backup-converted.zip` 就行  
+- **Legado 里已有书/书源/设置**：先转换，再合并，导入 `legado-merged.zip`
+
+### 最简命令
+
+```bash
+# 1. 搜书大师 → 转换结果
+python convert_bookshelf_backup.py "ssds.backup" -o backup-converted.zip
+
+# 2. 并进现有 Legado（默认输出 legado-merged.zip）
+python merge/merge_legado_backup.py --existing "你的legado备份.zip" --import backup-converted.zip
+```
+
+合并大概会做这些事（人话版）：
+
+- 搜书大师的书架 → 接到你原来的自定义分组**后面**
+- 同名同作者的书 → **保留你 Legado 里的**，跳过搜书那本
+- 新书、新搜索词、阅读时长 → 尽量加进去
+- 你原来的书源、主题、配置 → **原样保留**
+
+更细的说明、参数和注意点见：
+
+**[merge/README.md](merge/README.md)**
+
 ## 转换后会有哪些文件
 
 脚本输出的是一个精简的 Legado 备份，通常包含：
@@ -265,7 +303,15 @@ Legado 里可能只能看到书名等信息，打不开正文。
 当前版本明确不做书源迁移。两边书源不通用。
 
 ### Q: 会不会覆盖我现有 Legado 数据？
-会覆盖，一定**先备份自己的 Legado**，再导入。
+**直接导入转换结果**有可能覆盖或冲掉你原来的书架数据，所以一定要先备份 Legado。
+
+如果你 Legado 里**已经有书、书源、设置**，不要直接拿转换结果去恢复，请用合并脚本：
+
+```bash
+python merge/merge_legado_backup.py --existing "你的legado备份.zip" --import backup-converted.zip
+```
+
+详见 [`merge/README.md`](merge/README.md)。
 
 ### Q: 支持很大的备份吗？
 至少 100MB 左右的备份都没啥问题。  

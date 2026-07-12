@@ -2,13 +2,13 @@
 /*
 # Track scripts and docs only
 !convert_bookshelf_backup.py
-!merge_book_group.py
-!merge_search_history.py
-!merge_read_record.py
-!merge_bookshelf.py
-!merge_legado_backup.py
+!merge/
+!merge/**
 !README.md
 !backup_restore_analysis.md
 !legado_backup_compatibility_analysis.md
 !mrbooks_backup_converter_analysis.md
 !.gitignore
+# Never track bytecode
+**/__pycache__/
+**/*.pyc
