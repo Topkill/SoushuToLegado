@@ -1,8 +1,8 @@
-# 源 APK 本地备份到 legado-E 书架转换说明
+# 搜书大师本地备份到 legado-E 书架转换说明
 
 ## 当前结论
 
-这份源 APK 测试备份的真实书架数据在：
+这份搜书大师测试备份的真实书架数据在：
 
 ```text
 com.flyersoft.seekbooks/databases/mrbooks.db
@@ -40,7 +40,7 @@ N.tag / N.db
 
 `mrbooks.db.books.favorite` 是每本书所属的书架/分组名。
 
-源 APK 的书架顺序在：
+搜书大师的书架顺序在：
 
 ```text
 com.flyersoft.seekbooks/shared_prefs/shelf_names.txt
@@ -65,7 +65,7 @@ com.flyersoft.seekbooks/shared_prefs/shelf_names.txt
 
 legado-E 自带分组是负数 ID，例如 `全部(-1)`、`本地(-2)`、`网络未分组(-4)` 等；用户自己创建的书架分组使用正数位标记。代码里的 `BookGroupDao.getUnusedId()` 从 `1L` 开始，每次左移一位，所以新增分组就是 `1, 2, 4, 8...` 这种序列。
 
-生成转换备份时，`bookGroup.json` 会写入 legado 自带负数分组，同时追加源 APK 对应的正数自定义分组。测试样本里的 `本地` 书架会生成 `本地(8)`，它和 legado 自带的 `本地(-2)` 不是同一个分组，不能混用。
+生成转换备份时，`bookGroup.json` 会写入 legado 自带负数分组，同时追加搜书大师 对应的正数自定义分组。测试样本里用户自定义的 `本地` 书架会生成正数分组（如 `groupId=8`），它和 Legado 自带的**本地书系统分组** `本地(-2)` 不是同一个分组，不能混用。前者是书架名，后者是“本地书/文件型书”类型分组。
 
 测试样本转换结果：
 
@@ -117,7 +117,7 @@ books(
 /sdcard/Books/Soushu/.Books/书名(作者)/书名.wbpub
 ```
 
-这类书是通过源 APK 的书源搜索后加入书架的书。它虽然在备份中表现为本地 `.wbpub` 文件，但本质是网络书籍的导出缓存。
+这类书是通过搜书大师的书源搜索后加入书架的书。它虽然在备份中表现为本地 `.wbpub` 文件，但本质是**非本地书/网文书**的导出缓存，不要当成用户导入的**本地书**。
 
 伴随文件：
 
@@ -148,7 +148,7 @@ sourceKey/.cover
 
 缺失字段按缺失输出，不从 `books` 表或其他伴随文件兜底。
 
-### 真正导入的本地书
+### 真正导入的本地书（相对非本地书/网文书）
 
 路径形如：
 
@@ -175,7 +175,7 @@ sourceKey/.cover
 
 ## 搜索历史
 
-源 APK 的书籍搜索历史在：
+搜书大师的书籍搜索历史在：
 
 ```text
 com.flyersoft.seekbooks/shared_prefs/web_book_search
@@ -207,7 +207,7 @@ com.flyersoft.seekbooks/shared_prefs/web_book_search
 
 ## 阅读进度映射
 
-源 APK：
+搜书大师：
 
 ```text
 shared_prefs/positions10.xml
@@ -241,7 +241,7 @@ shared_prefs/positions10.xml
 
 ## addTime 映射
 
-源 APK：
+搜书大师：
 
 ```text
 mrbooks.db.books.addTime
@@ -289,7 +289,7 @@ legado 恢复 `bookshelf.json` 时用普通 Gson，缺失字段不会可靠落�
     - `latestChapterTime = addTime`
     - `lastCheckTime = addTime`
     - `durChapterTime = addTime`
-  - 原因：legado 新建/加入书架时，这三项时间通常都会被写成创建时刻；源 APK 没有更精确的上次阅读/检查时间时，用 `addTime` 模拟“在该时刻加入书架”
+  - 原因：legado 新建/加入书架时，这三项时间通常都会被写成创建时刻；搜书大师没有更精确的上次阅读/检查时间时，用 `addTime` 模拟“在该时刻加入书架”
   - 注意：这不是真实“上次阅读时间”映射；真实阅读进度另算
 
 ## 当前脚本
@@ -301,7 +301,7 @@ legado 恢复 `bookshelf.json` 时用普通 Gson，缺失字段不会可靠落�
 C:\Users\delll\Desktop\jadx\convert_bookshelf_backup.py
 ```
 
-支持输入源 APK 备份 zip，也支持输入已解压目录：
+支持输入搜书大师备份 zip，也支持输入已解压目录：
 
 ```powershell
 python .\convert_bookshelf_backup.py .\ssds.backup -o .\backup-converted.zip
@@ -323,8 +323,8 @@ searchHistory.json
 自定义书架/分组: 4
 legado内置分组: 6
 搜索历史: 3
-.wbpub书源书籍: 3
-真正本地书籍: 1
+.wbpub 网文书（非本地书）: 3
+真正本地书: 1
 ```
 
 

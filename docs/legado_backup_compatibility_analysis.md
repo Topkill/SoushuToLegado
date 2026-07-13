@@ -7,7 +7,7 @@
 - `C:\Users\delll\Desktop\jadx\legado-E`
 - 当前提交：`8b8de45d7 [日志]：更新日志`
 
-源 APK 反编译目录：
+搜书大师反编译目录：
 
 - `C:\Users\delll\Desktop\jadx\sources`
 - 已有源端备份分析：`C:\Users\delll\Desktop\jadx\backup_restore_analysis.md`
@@ -21,7 +21,7 @@
 - 小说 APK：
   - 备份是普通 zip，但 zip entry 被映射成 `1.tag`、`2.tag` 等。
   - `_names.list` 保存真实路径。
-  - 内容是应用私有目录的原始文件、SQLite 数据库、SharedPreferences、本地书文件等。
+  - 内容是应用私有目录的原始文件、SQLite 数据库、SharedPreferences，以及备份时额外打入的**本地书**原文件等。
   - 本质是“文件级备份”。
 
 - `legado-E`：
@@ -30,10 +30,10 @@
   - 主要从 Room 数据库导出为 JSON，再恢复时逐个 JSON 导入。
   - 本质是“数据模型级备份”。
 
-所以转换器不能把源 APK 的 `.tag` 文件改名后直接塞给 `legado-E`。正确做法是：
+所以转换器不能把搜书大师的 `.tag` 文件改名后直接塞给 `legado-E`。正确做法是：
 
 1. 解析源备份 `_names.list`，还原每个 `.tag` 的真实身份。
-2. 找到源 APK 的 SQLite 数据库。
+2. 找到搜书大师的 SQLite 数据库。
 3. 从源表读取书架、书籍信息、书源、TTS 等数据。
 4. 按 `legado-E` 当前实体结构生成 `bookshelf.json`、`bookSource.json`、`httpTTS.json` 等目标文件。
 5. 把这些目标文件打成 `legado-E` 可恢复的 zip。
@@ -128,8 +128,8 @@ Restore.restore(context, uri)
 
 恢复 `bookshelf.json` 时有两个额外行为：
 
-- 本地书籍如果开启了“忽略本地书”，会跳过。
-- 本地书籍恢复后会重新计算封面路径：`LocalBook.getCoverPath(book)`。
+- 若开启了“忽略本地书”，恢复时会跳过 **本地书**（`BookType.local` / `origin=loc_book`，相对网文书/网络书）。
+- **本地书**恢复后会重新计算封面路径：`LocalBook.getCoverPath(book)`。
 
 重要限制：
 
@@ -304,11 +304,11 @@ loginCheckJs
 lastUpdateTime
 ```
 
-源 APK 的 HTTP TTS 表字段较少，只能部分填充。
+搜书大师的 HTTP TTS 表字段较少，只能部分填充。
 
-## 源 APK 备份中可用的数据
+## 搜书大师备份中可用的数据
 
-源 APK 本地备份是文件级 zip，解压后只有：
+搜书大师本地备份是文件级 zip，解压后只有：
 
 ```text
 1.tag
@@ -319,7 +319,7 @@ _names.list
 
 `_names.list` 第 N 行对应 `N.tag` 的真实路径。`.tag` 不是文本格式，有些打开乱码是正常的，因为里面可能是 SQLite、图片、epub、书籍原文或其它二进制文件。
 
-源 APK 备份会包含应用私有目录中的未过滤持久化文件，所以转换器需要从 `.tag` 中识别 SQLite 数据库。可用策略：
+搜书大师备份会包含应用私有目录中的未过滤持久化文件，所以转换器需要从 `.tag` 中识别 SQLite 数据库。可用策略：
 
 1. 读取 `_names.list` 建立序号到真实路径的映射。
 2. 对每个 `.tag` 检查文件头是否为 SQLite。
@@ -436,7 +436,7 @@ START
 END
 ```
 
-这部分是源 APK 的章节目录数据，但目标官方备份不会导入章节表。
+这部分是搜书大师的章节目录数据，但目标官方备份不会导入章节表。
 
 ### BOOK_CONTENT_BEAN
 
@@ -455,14 +455,14 @@ TAG
 TIME_MILLIS
 ```
 
-这部分是源 APK 的正文缓存，目标官方备份不会导入正文缓存。
+这部分是搜书大师的正文缓存，目标官方备份不会导入正文缓存。
 
 ### 书架与书籍详情的归属关系
 
 > 纠正说明：这一段是早期兼容性假设，不适用于当前 `com.flyersoft.seekbooks` 样本。  
 > 该样本的真实书架/书籍归属在 `com.flyersoft.seekbooks/databases/mrbooks.db` 的 `books.favorite`，不是 `BOOK_SHELF` / `BOOK_INFO_BEAN`。
 
-源 APK 备份里没有单独的“书架-书籍关系表”，也没有独立的 JSON 文件记录这层关系。它存在于备份包内某个 SQLite 数据库 `.tag` 文件中：
+搜书大师备份里没有单独的“书架-书籍关系表”，也没有独立的 JSON 文件记录这层关系。它存在于备份包内某个 SQLite 数据库 `.tag` 文件中：
 
 1. 先通过 `_names.list` 找到每个 `N.tag` 对应的真实路径。
 2. 再扫描 `.tag` 文件头，定位包含 `BOOK_SHELF`、`BOOK_INFO_BEAN`、`BOOK_CHAPTER`、`BOOK_CONTENT_BEAN` 的 SQLite 数据库。
@@ -572,8 +572,8 @@ URL
 
 注意：
 
-- `legado-E` 的 `durChapterPos` 是“当前章节首行字符索引位置”。源 APK 的 `DUR_CHAPTER_PAGE` 名称像页码，但 `ImportOldData` 已直接映射到 `durChapterPos`，可以先沿用。
-- 源 APK 的 `GROUP` 是 Int，目标是 Long 位标记。当前仓库的 `ImportOldData.fromOldBooks()` 没有映射旧分组，说明这部分不能盲目直接迁移，需要结合样本确认旧 `GROUP` 的含义。
+- `legado-E` 的 `durChapterPos` 是“当前章节首行字符索引位置”。搜书大师的 `DUR_CHAPTER_PAGE` 名称像页码，但 `ImportOldData` 已直接映射到 `durChapterPos`，可以先沿用。
+- 搜书大师的 `GROUP` 是 Int，目标是 Long 位标记。当前仓库的 `ImportOldData.fromOldBooks()` 没有映射旧分组，说明这部分不能盲目直接迁移，需要结合样本确认旧 `GROUP` 的含义。
 
 ### 2. 书源
 
@@ -659,9 +659,11 @@ lastUpdateTime = 当前时间或 0
 
 ### 4. 本地书元数据
 
+这里的**本地书**指用户导入的文件型书籍（对应 Legado `loc_book`），**不是** `.wbpub` 网文书缓存。`.wbpub` 在搜书大师里虽是本地文件形态，但转换时应视为**非本地书/网文书**。
+
 兼容度：中到低。
 
-源 APK 会额外备份本地书文件及伴随文件：
+搜书大师会额外备份本地书文件及伴随文件：
 
 ```text
 .sources
@@ -702,8 +704,8 @@ lastUpdateTime = 当前时间或 0
 
 问题：
 
-- 源 APK 当前只确认到书架表里有 Int 类型 `GROUP`。
-- 暂未确认源 APK 是否另有“分组名称表”。
+- 搜书大师当前只确认到书架表里有 Int 类型 `GROUP`。
+- 暂未确认搜书大师 是否另有“分组名称表”。
 - `legado-E` 新版分组是 Long 位标记，不是普通 Int 序号。
 
 建议：
@@ -725,7 +727,7 @@ lastUpdateTime = 当前时间或 0
 
 问题：
 
-- 源 APK 中没有明确定位到与 `legado-E.replace_rules` 一一对应的替换规则表。
+- 搜书大师中没有明确定位到与 `legado-E.replace_rules` 一一对应的替换规则表。
 - 源代码里存在全局替换列表，但更像 SharedPreferences 或其它配置，不是当前已确认的 GreenDAO 表。
 
 建议：
@@ -757,7 +759,7 @@ readTime
 lastRead
 ```
 
-源 APK 当前确认的是单书阅读进度，不是跨设备阅读时长统计。
+搜书大师当前确认的是单书阅读进度，不是跨设备阅读时长统计。
 
 建议：
 
@@ -820,7 +822,7 @@ lastRead
 
 ### 5. SharedPreferences 配置
 
-源 APK 的 SharedPreferences 包含：
+搜书大师的 SharedPreferences 包含：
 
 - UI 设置
 - 设备适配
@@ -863,7 +865,7 @@ readConfig.json
 shareReadConfig.json
 ```
 
-源 APK 当前没有明确等价数据。
+搜书大师当前没有明确等价数据。
 
 结论：
 
@@ -873,7 +875,7 @@ shareReadConfig.json
 
 ### 输入
 
-源 APK 本地备份：
+搜书大师本地备份：
 
 ```text
 ssds.backup
@@ -1011,7 +1013,7 @@ BookSource.weight
 
 1. 是否接受第一版不迁移本地书原文件，只迁移书架记录？
 2. 是否需要输出一个“本地书文件目录”作为 zip 之外的附加结果？
-3. 是否忽略源 APK 的分组，还是等样本确认 `GROUP` 含义后再迁移？
+3. 是否忽略搜书大师的分组，还是等样本确认 `GROUP` 含义后再迁移？
 4. 是否默认不迁移 Cookie、账号和隐私相关数据？
 5. 是否要把转换报告作为单独 `.md` 或 `.json` 输出？
 
