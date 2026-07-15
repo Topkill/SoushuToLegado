@@ -347,12 +347,17 @@ def read_statistics_rows(db_path: Path) -> list[sqlite3.Row]:
 
 
 def clean_book_display_name(value: Any) -> str:
-    """Normalize source books.book values like '书名#@#别名'."""
+    """Normalize source books.book values like '别名#@#真正书名'."""
     text_value_ = clean_text(value)
     if not text_value_:
         return ""
-    name, sep, _ = text_value_.partition("#@#")
-    return name.strip() if sep else text_value_
+    # Source stores alternate/old title before #@#, real display name after it.
+    _, sep, real_name = text_value_.partition("#@#")
+    if sep:
+        real_name = real_name.strip()
+        if real_name:
+            return real_name
+    return text_value_
 
 
 def book_name_from_filename(filename: str) -> str:
@@ -368,6 +373,28 @@ def book_name_from_filename(filename: str) -> str:
             return parent.split("(", 1)[0].strip() or stem
         return parent
     return stem
+
+
+def author_from_filename(filename: str) -> str:
+    """Best-effort author from a parent folder like '书名(作者)'."""
+    path = filename.replace("\\", "/")
+    parent = PurePosixPath(path).parent.name
+    if not parent or parent in {".", ""}:
+        return ""
+    if "(" not in parent or not parent.endswith(")"):
+        return ""
+    author = parent.rsplit("(", 1)[-1]
+    if author.endswith(")"):
+        author = author[:-1]
+    return author.strip()
+
+
+def first_nonempty(*values: Any) -> str:
+    for value in values:
+        text = clean_text(value)
+        if text:
+            return text
+    return ""
 
 
 def last_day_timestamp_from_dates(dates_text: str) -> int:
@@ -892,11 +919,23 @@ def row_to_book(
     dur_chapter_index, dur_chapter_pos = positions.get(norm_real_name(filename), (0, 0))
     dur_chapter_time = dur_chapter_times.get(norm_real_name(filename), add_time)
 
+    db_name = clean_book_display_name(row["book"])
+    db_author = clean_local_text_marker(row["author"])
+    db_intro = clean_text(row["description"])
+    db_cover = clean_text(row["coverFile"])
+    path_name = book_name_from_filename(filename)
+    path_author = author_from_filename(filename)
+
     if is_wbpub_book(row):
         meta = read_wbpub_meta(backup, filename)
+        # Field priority (user-confirmed):
+        # name/author prefer mrbooks.books, then companion, then path.
+        # intro prefers companion description, then books.description.
+        # bookUrl/origin/originName prefer companion, else empty.
+        # coverUrl prefers companion .cover, then books.coverFile.
         book: dict[str, Any] = {
-            "author": meta.author,
-            "bookUrl": meta.detail_url,
+            "author": first_nonempty(db_author, meta.author, path_author),
+            "bookUrl": clean_text(meta.detail_url),
             "canUpdate": True,
             "durChapterIndex": dur_chapter_index,
             "durChapterPos": dur_chapter_pos,
@@ -905,19 +944,21 @@ def row_to_book(
             "lastCheckCount": 0,
             "lastCheckTime": add_time,
             "latestChapterTime": add_time,
-            "name": meta.name,
+            "name": first_nonempty(db_name, meta.name, path_name),
             "order": order,
-            "origin": meta.source_key,
-            "originName": meta.source_name,
+            "origin": clean_text(meta.source_key),
+            "originName": clean_text(meta.source_name),
             "originOrder": 0,
             "tocUrl": "",
             "totalChapterNum": meta.total_chapter_num,
             "type": BOOK_TYPE_TEXT,
         }
-        if meta.cover_url:
-            book["coverUrl"] = meta.cover_url
-        if meta.intro:
-            book["intro"] = meta.intro
+        cover_url = first_nonempty(meta.cover_url, db_cover)
+        if cover_url:
+            book["coverUrl"] = cover_url
+        intro = first_nonempty(meta.intro, db_intro)
+        if intro:
+            book["intro"] = intro
         if category:
             book["kind"] = category
         if meta.latest_chapter_title:
@@ -928,12 +969,9 @@ def row_to_book(
         return book
 
     local_name = file_name_from_path(filename)
-    local_author = clean_local_text_marker(row["author"])
     local_kind = clean_local_text_marker(category)
-    local_cover = clean_text(row["coverFile"])
-    local_intro = text_value(row["description"])
     book = {
-        "author": local_author,
+        "author": first_nonempty(db_author, path_author),
         "bookUrl": filename,
         "canUpdate": True,
         "durChapterIndex": dur_chapter_index,
@@ -943,7 +981,7 @@ def row_to_book(
         "lastCheckCount": 0,
         "lastCheckTime": add_time,
         "latestChapterTime": add_time,
-        "name": clean_text(row["book"]),
+        "name": first_nonempty(db_name, path_name),
         "order": order,
         "origin": LOCAL_ORIGIN,
         "originName": local_name,
@@ -952,10 +990,10 @@ def row_to_book(
         "totalChapterNum": 0,
         "type": BOOK_TYPE_LOCAL_TEXT,
     }
-    if local_cover:
-        book["coverUrl"] = local_cover
-    if local_intro:
-        book["intro"] = local_intro
+    if db_cover:
+        book["coverUrl"] = db_cover
+    if db_intro:
+        book["intro"] = db_intro
     if local_kind:
         book["kind"] = local_kind
     return book
