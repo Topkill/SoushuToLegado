@@ -811,9 +811,77 @@ def build_dates_by_file(stats_rows: list[sqlite3.Row]) -> dict[str, int]:
     return result
 
 
+def wbpub_source_dir_candidates(backup: BackupFiles, filename: str) -> list[str]:
+    """List subdirectory names under the book dir that contain a .url companion."""
+    book_dir = posix_dirname(filename)
+    prefix = f"{book_dir}/" if book_dir else ""
+    suffix = "/.url"
+    found: set[str] = set()
+    for real_name in backup.names_list:
+        if real_name.startswith(prefix) and real_name.endswith(suffix):
+            rel = real_name[len(prefix) : -len(suffix)]
+            if rel and "/" not in rel:
+                found.add(rel)
+    return sorted(found)
+
+
+BOOK_URL_RE = re.compile(r"https?://[^\s\"'<>#@*]+")
+
+
+def looks_like_book_url(text: str) -> bool:
+    """Reject dirty companion .url content (chapter lists, prose, JSON...)."""
+    return bool(extract_book_url(text))
+
+
+def extract_book_url(text: str) -> str:
+    """Pull the first real http(s) URL out of a companion .url payload."""
+    if not text:
+        return ""
+    match = BOOK_URL_RE.search(text)
+    return match.group(0) if match else ""
+
+
+def select_wbpub_source(backup: BackupFiles, filename: str) -> tuple[str, str]:
+    """Pick (source_key, detail_url) for a .wbpub book.
+
+    App versions differ in what the .wbpub file stores: bare source key,
+    "name*key#url", JSON blobs, or unrelated text. Never trust the raw
+    content blindly: candidate keys are verified against subdirectories
+    that actually contain a .url companion, and the .url content must
+    look like a real URL before it is accepted.
+    """
+    book_dir = posix_dirname(filename)
+    dirs = wbpub_source_dir_candidates(backup, filename)
+    if not dirs:
+        return "", ""
+
+    text = clean_text(read_companion_text(backup, filename))
+    prefs: list[str] = []
+    if text:
+        prefs.append(text)
+        tail = text.partition("#")[0].rpartition("*")[2].strip()
+        mid = text.rpartition("*")[2].partition("#")[0].strip()
+        for cand in (tail, mid):
+            if cand and cand not in prefs:
+                prefs.append(cand)
+
+    ordered = [d for d in dirs if d in prefs] + [d for d in dirs if d not in prefs]
+    fallback_key = ""
+    for d in ordered:
+        raw_url_text = read_companion_text(backup, f"{book_dir}/{d}/.url")
+        url_text = extract_book_url(raw_url_text)
+        if url_text:
+            return d, url_text
+        if raw_url_text.strip() and not fallback_key:
+            fallback_key = d
+    # No valid URL anywhere: keep a display key only; caller synthesizes
+    # a placeholder bookUrl so rows never collapse on restore.
+    return fallback_key, ""
+
+
 def read_wbpub_meta(backup: BackupFiles, filename: str) -> CompanionMeta:
     book_dir = posix_dirname(filename)
-    source_key = read_companion_text(backup, filename)
+    source_key, detail_url = select_wbpub_source(backup, filename)
     sources_text = read_companion_text(backup, f"{book_dir}/.sources")
     source_name = parse_source_name(sources_text, source_key)
     source_dir = f"{book_dir}/{source_key}" if source_key else book_dir
@@ -822,7 +890,7 @@ def read_wbpub_meta(backup: BackupFiles, filename: str) -> CompanionMeta:
     return CompanionMeta(
         source_key=source_key,
         source_name=source_name,
-        detail_url=read_companion_text(backup, f"{source_dir}/.url"),
+        detail_url=detail_url,
         name=read_companion_text(backup, f"{source_dir}/.name"),
         author=read_companion_text(backup, f"{source_dir}/.author"),
         intro=read_companion_text(backup, f"{source_dir}/.description"),
@@ -933,9 +1001,12 @@ def row_to_book(
         # intro prefers companion description, then books.description.
         # bookUrl/origin/originName prefer companion, else empty.
         # coverUrl prefers companion .cover, then books.coverFile.
+        # bookUrl must be globally unique: legado uses it as the primary key,
+        # so empty/colliding URLs would collapse rows on restore.
+        book_url = clean_text(meta.detail_url) or f"ssds://wbpub/{sequence:05d}"
         book: dict[str, Any] = {
             "author": first_nonempty(db_author, meta.author, path_author),
-            "bookUrl": clean_text(meta.detail_url),
+            "bookUrl": book_url,
             "canUpdate": True,
             "durChapterIndex": dur_chapter_index,
             "durChapterPos": dur_chapter_pos,
@@ -1146,6 +1217,18 @@ def run() -> int:
             )
             for sequence, row in enumerate(rows, start=1)
         ]
+        # Safety net: legado's books table uses bookUrl as primary key.
+        # De-duplicate so no row can silently overwrite another on restore.
+        seen_book_urls: set[str] = set()
+        for book in books:
+            url = book["bookUrl"]
+            if url in seen_book_urls:
+                suffix = 1
+                while f"{url}#{suffix}" in seen_book_urls:
+                    suffix += 1
+                url = f"{url}#{suffix}"
+                book["bookUrl"] = url
+            seen_book_urls.add(url)
         search_history = build_search_history(read_source_search_history(backup))
         read_records = build_read_records(
             stats_rows,
@@ -1168,6 +1251,7 @@ def run() -> int:
             )
 
         wbpub_count = sum(1 for row in rows if is_wbpub_book(row))
+        placeholder_count = sum(1 for b in books if str(b.get("bookUrl", "")).startswith("ssds://wbpub/"))
         custom_group_count = sum(1 for group in groups if group["groupId"] > 0)
         print(f"转换完成: {output_path}")
         print(f"书籍: {len(books)}")
@@ -1177,6 +1261,7 @@ def run() -> int:
         print(f"阅读记录: {len(read_records)}")
         print(f".wbpub书源书籍: {wbpub_count}")
         print(f"真正本地书籍: {len(books) - wbpub_count}")
+        print(f"无源URL占位书(需换源): {placeholder_count}")
         if report_path:
             print(f"报告: {report_path}")
         if args.keep_temp:
