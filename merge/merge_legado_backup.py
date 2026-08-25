@@ -158,6 +158,37 @@ def write_json(path: Path, data: Any) -> None:
     )
 
 
+def reading_stats(rows: list[Any]) -> tuple[int, int]:
+    """返回 (有效记录数, 总阅读毫秒数)，忽略空书名的无效记录。"""
+    count = 0
+    total_ms = 0
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        if not str(raw.get("bookName") or "").strip():
+            continue
+        count += 1
+        try:
+            total_ms += max(0, int(raw.get("readTime") or 0))
+        except (TypeError, ValueError):
+            continue
+    return count, total_ms
+
+
+def format_duration(ms: int) -> str:
+    seconds = ms // 1000
+    days, rest = divmod(seconds, 86400)
+    hours, rest = divmod(rest, 3600)
+    minutes, secs = divmod(rest, 60)
+    parts: list[str] = []
+    if days:
+        parts.append(f"{days}天")
+    if days or hours:
+        parts.append(f"{hours}小时")
+    parts.append(f"{minutes}分{secs}秒")
+    return "".join(parts)
+
+
 def build_report(
     existing_path: Path,
     import_path: Path,
@@ -167,6 +198,10 @@ def build_report(
     bookshelf_summary: dict[str, Any],
     search_summary: dict[str, Any],
     read_summary: dict[str, Any],
+    before_count: int,
+    before_ms: int,
+    after_count: int,
+    after_ms: int,
     passthrough_count: int,
 ) -> str:
     lines = [
@@ -205,13 +240,13 @@ def build_report(
         ]
     )
     for item in bookshelf_summary.get("skippedDuplicates", []):
-        author = item.get("author") or "(empty author)"
-        lines.append(f"- skip `{item.get('name')}` / {author}")
+        author = item.get("author") or "（无作者）"
+        lines.append(f"- 跳过 `{item.get('name')}` / {author}")
     for item in bookshelf_summary.get("appendedBooks", []):
-        author = item.get("author") or "(empty author)"
+        author = item.get("author") or "（无作者）"
         lines.append(
-            f"- add `{item.get('name')}` / {author} "
-            f"group={item.get('group')} order={item.get('order')}"
+            f"- 新增 `{item.get('name')}` / {author} "
+            f"分组={item.get('group')} 顺序={item.get('order')}"
         )
 
     lines.extend(
@@ -228,6 +263,10 @@ def build_report(
             f"- 现有记录：{read_summary.get('existingCount', 0)}",
             f"- 同名累加：{read_summary.get('mergedSameNameCount', 0)}",
             f"- 仅导入追加：{read_summary.get('appendedCount', 0)}",
+            f"- 合并前阅读记录：{before_count} 本",
+            f"- 合并后阅读记录：{after_count} 本",
+            f"- 合并前阅读时长：{format_duration(before_ms)}（{before_ms:,} 毫秒）",
+            f"- 合并后阅读时长：{format_duration(after_ms)}（{after_ms:,} 毫秒）",
             "",
             "## 注意",
             "",
@@ -369,41 +408,60 @@ def main() -> int:
             },
         )
 
-        print(f"existing: {existing_path}")
-        print(f"import:   {import_path}")
-        print(f"output:   {output_path}")
+        before_count, before_ms = reading_stats(existing_read)
+        after_count, after_ms = reading_stats(merged_read)
+        dropped_existing = len(existing_read) - before_count
+
+        print(f"现有备份: {existing_path}")
+        print(f"导入备份: {import_path}")
+        print(f"输出文件: {output_path}")
         print(
-            f"bookGroup: +{group_summary['appendedCount']} custom "
-            f"(total {group_summary['totalCount']})"
+            f"分组: 现有 {len(existing_groups)} 个, "
+            f"新增 {group_summary['appendedCount']} 个, "
+            f"共 {len(merged_groups)} 个"
         )
         print(
-            f"bookshelf: +{bookshelf_summary['appendedCount']} books, "
-            f"skip {bookshelf_summary['skippedDuplicateCount']} duplicates"
+            f"书架: 现有 {len(existing_books)} 本, "
+            f"新增 {bookshelf_summary['appendedCount']} 本, "
+            f"跳过重复 {bookshelf_summary['skippedDuplicateCount']} 本, "
+            f"共 {len(merged_books)} 本"
         )
         print(
-            f"searchHistory: +{search_summary['appendedCount']} words, "
-            f"skip {search_summary['skippedDuplicateCount']}"
+            f"搜索历史: 现有 {len(existing_search)} 条, "
+            f"新增 {search_summary['appendedCount']} 条, "
+            f"跳过重复 {search_summary['skippedDuplicateCount']} 条, "
+            f"共 {len(merged_search)} 条"
         )
         print(
-            f"readRecord: merge {read_summary['mergedSameNameCount']} names, "
-            f"+{read_summary['appendedCount']} new"
+            f"阅读记录: 合并前 {before_count} 本, "
+            f"新增 {read_summary['appendedCount']} 本, "
+            f"同名合并 {read_summary['mergedSameNameCount']} 本, "
+            f"合并后 {after_count} 本"
         )
-        print(f"passthrough files from existing: {passthrough_count}")
+        print(
+            f"阅读时长: 合并前 {format_duration(before_ms)} ({before_ms:,} 毫秒), "
+            f"合并后 {format_duration(after_ms)} ({after_ms:,} 毫秒)"
+        )
+        if read_summary.get("skippedEmptyCount"):
+            print(f"提示: 导入备份中跳过空书名阅读记录 {read_summary['skippedEmptyCount']} 条")
+        if dropped_existing:
+            print(f"提示: 现有备份中跳过空书名阅读记录 {dropped_existing} 条")
+        print(f"透传现有备份其他文件: {passthrough_count} 个")
 
         if args.verbose:
             for item in group_mapping_list:
                 print(
-                    f"  group + {item['oldGroupName']}: "
-                    f"{item['oldGroupId']} -> {item['newGroupId']} order={item['order']}"
+                    f"  分组新增 {item['oldGroupName']}: "
+                    f"{item['oldGroupId']} -> {item['newGroupId']} 顺序={item['order']}"
                 )
             for item in bookshelf_summary.get("skippedDuplicates", []):
-                author = item.get("author") or "(empty author)"
-                print(f"  book skip {item.get('name')} / {author}")
+                author = item.get("author") or "（无作者）"
+                print(f"  书籍跳过 {item.get('name')} / {author}")
             for item in bookshelf_summary.get("appendedBooks", []):
-                author = item.get("author") or "(empty author)"
+                author = item.get("author") or "（无作者）"
                 print(
-                    f"  book + {item.get('name')} / {author} "
-                    f"group={item.get('group')} order={item.get('order')}"
+                    f"  书籍新增 {item.get('name')} / {author} "
+                    f"分组={item.get('group')} 顺序={item.get('order')}"
                 )
 
         if args.report:
@@ -416,12 +474,16 @@ def main() -> int:
                 bookshelf_summary,
                 search_summary,
                 read_summary,
+                before_count,
+                before_ms,
+                after_count,
+                after_ms,
                 passthrough_count,
             )
             report_path = Path(args.report)
             report_path.parent.mkdir(parents=True, exist_ok=True)
             report_path.write_text(report, encoding="utf-8")
-            print(f"report: {report_path}")
+            print(f"报告: {report_path}")
 
         return 0
     finally:
@@ -433,5 +495,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as exc:  # noqa: BLE001 - CLI boundary
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"错误: {exc}", file=sys.stderr)
         raise SystemExit(1)
