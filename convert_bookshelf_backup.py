@@ -1173,6 +1173,48 @@ def write_report(
     report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def format_duplicate_lines(duplicate_groups: list[dict[str, Any]]) -> list[str]:
+    lines: list[str] = []
+    for item in duplicate_groups:
+        author = item["author"] or "（无作者）"
+        lines.append(f"重复: {item['name']} / {author}")
+        for copy in item["copies"]:
+            lines.append(f"    [{copy['shelf']}] {copy['path']}")
+    return lines
+
+
+def prompt_duplicate_view(
+    duplicate_groups: list[dict[str, Any]],
+    total_books: int,
+    dedup_count: int,
+    txt_path: Path,
+) -> None:
+    """交互式查看重复书籍；非交互环境(EOF)自动按不查看处理。"""
+    try:
+        choice = input(
+            f"\n重复书籍共 {len(duplicate_groups)} 组/{total_books} 本"
+            f"(会被去重 {dedup_count} 本)。"
+            f"输入 1 或回车结束不查看 / 2 在此列出 / 3 导出到 txt 文件: "
+        ).strip()
+    except EOFError:
+        return
+    if choice in ("", "1"):
+        return
+    if choice == "2":
+        for line in format_duplicate_lines(duplicate_groups):
+            print(line)
+    elif choice == "3":
+        lines = [
+            f"同名同作者重复书籍 共 {len(duplicate_groups)} 组 / {total_books} 本"
+            f"（导入阅读后会被去重 {dedup_count} 本）",
+            "",
+            *format_duplicate_lines(duplicate_groups),
+        ]
+        txt_path.parent.mkdir(parents=True, exist_ok=True)
+        txt_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        print(f"重复书籍已导出: {txt_path}")
+
+
 def run() -> int:
     args = parse_args()
     backup_path = Path(args.backup).resolve()
@@ -1300,15 +1342,19 @@ def run() -> int:
                 f"导入阅读后会被去重 {duplicate_dedup_count} 本"
             )
         if args.verbose:
-            for item in duplicate_groups:
-                author = item["author"] or "（无作者）"
-                print(f"  重复: {item['name']} / {author}")
-                for copy in item["copies"]:
-                    print(f"    [{copy['shelf']}] {copy['path']}")
+            for line in format_duplicate_lines(duplicate_groups):
+                print(line)
         if report_path:
             print(f"报告: {report_path}")
         if args.keep_temp:
             print(f"临时目录: {temp_root}")
+        if duplicate_groups and not args.verbose:
+            prompt_duplicate_view(
+                duplicate_groups,
+                duplicate_book_count,
+                duplicate_dedup_count,
+                output_path.with_name(output_path.stem + "-重复书籍.txt"),
+            )
         return 0
     finally:
         if backup is not None:

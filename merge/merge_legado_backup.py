@@ -235,9 +235,9 @@ def build_report(
             f"- 现有书籍：{bookshelf_summary.get('existingCount', 0)}",
             f"- 导入扫描：{bookshelf_summary.get('importCount', 0)}",
             f"- 去除同名同作者：{bookshelf_summary.get('skippedDuplicateCount', 0)} 本"
-            f"（与现有重名 {bookshelf_summary.get('skippedExistingMatchCount', 0)} 本，"
-            f"组内副本 {bookshelf_summary.get('skippedImportDuplicateCount', 0)} 本）",
-            f"- 源数据含重复：{bookshelf_summary.get('importDuplicateGroups', 0)} 组"
+            f"（导入备份与现有备份重复 {bookshelf_summary.get('skippedExistingMatchCount', 0)} 本，"
+            f"导入备份内重复 {bookshelf_summary.get('skippedImportDuplicateCount', 0)} 本）",
+            f"- 含重复：{bookshelf_summary.get('importDuplicateGroups', 0)} 组"
             f"/{bookshelf_summary.get('importDuplicateBooks', 0)} 本",
             f"- 追加：{bookshelf_summary.get('appendedCount', 0)}",
             f"- 合并后一共：{bookshelf_summary.get('mergedCount', 0)} 本",
@@ -319,6 +319,74 @@ def pack_output_zip(
             passthrough += 1
 
     return passthrough
+
+
+SKIP_REASON_LABELS = {
+    "same name+author already exists in existing bookshelf": "导入备份与现有备份重复",
+    "duplicate of an earlier import book": "导入备份内重复",
+}
+
+
+def format_merge_duplicate_lines(
+    bookshelf_summary: dict[str, Any],
+    remain_duplicates: list[tuple[str, str, int]],
+) -> list[str]:
+    lines: list[str] = []
+    skipped = bookshelf_summary.get("skippedDuplicates", [])
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for item in skipped:
+        label = SKIP_REASON_LABELS.get(item.get("reason", ""), "重复")
+        grouped.setdefault(label, []).append(item)
+
+    pending = dict(grouped)
+    for label in (*SKIP_REASON_LABELS.values(), *pending.keys()):
+        items = pending.pop(label, None)
+        if not items:
+            continue
+        lines.append(f"== {label}（共 {len(items)} 本）==")
+        for item in items:
+            author = item.get("author") or "（无作者）"
+            origin = item.get("importOrigin") or "-"
+            lines.append(f"{item.get('name')} / {author}   来源: {origin}")
+        lines.append("")
+
+    if remain_duplicates:
+        lines.append("== 合并结果仍存在的同名同作者（导入阅读后会被去重）==")
+        for name, author, count in remain_duplicates:
+            suffix = f" / {author}" if author else ""
+            times = f" ×{count}" if count > 1 else ""
+            lines.append(f"《{name}》{suffix}{times}")
+    return lines
+
+
+def prompt_merge_duplicate_view(
+    bookshelf_summary: dict[str, Any],
+    remain_duplicates: list[tuple[str, str, int]],
+    txt_path: Path,
+) -> None:
+    """交互式查看合并去重明细；非交互环境(EOF)自动按不查看处理。"""
+    skipped = bookshelf_summary.get("skippedDuplicateCount", 0)
+    try:
+        choice = input(
+            f"\n本次去重书籍共 {skipped} 本。"
+            f"输入 1 或回车结束不查看 / 2 在此列出 / 3 导出到 txt 文件: "
+        ).strip()
+    except EOFError:
+        return
+    if choice in ("", "1"):
+        return
+    if choice == "2":
+        for line in format_merge_duplicate_lines(bookshelf_summary, remain_duplicates):
+            print(line)
+    elif choice == "3":
+        lines = [
+            f"合并去重的同名同作者书籍 共 {skipped} 本",
+            "",
+            *format_merge_duplicate_lines(bookshelf_summary, remain_duplicates),
+        ]
+        txt_path.parent.mkdir(parents=True, exist_ok=True)
+        txt_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        print(f"重复书籍已导出: {txt_path}")
 
 
 def main() -> int:
@@ -429,6 +497,10 @@ def main() -> int:
         remain_groups = sum(1 for count in remain_na.values() if count > 1)
         remain_total = sum(count for count in remain_na.values() if count > 1)
         remain_dedup = sum(count - 1 for count in remain_na.values() if count > 1)
+        remain_duplicates = sorted(
+            ((key[0], key[1], count) for key, count in remain_na.items() if count > 1),
+            key=lambda item: -item[2],
+        )
         bookshelf_summary["remainingDuplicateGroups"] = remain_groups
         bookshelf_summary["remainingDuplicateCount"] = remain_dedup
         bookshelf_summary["mergedCount"] = len(merged_books)
@@ -501,7 +573,8 @@ def main() -> int:
                 )
             for item in bookshelf_summary.get("skippedDuplicates", []):
                 author = item.get("author") or "（无作者）"
-                print(f"  书籍跳过 {item.get('name')} / {author}")
+                reason = SKIP_REASON_LABELS.get(item.get("reason", ""), "重复")
+                print(f"  书籍跳过[{reason}] {item.get('name')} / {author}")
             for item in bookshelf_summary.get("appendedBooks", []):
                 author = item.get("author") or "（无作者）"
                 print(
@@ -529,6 +602,16 @@ def main() -> int:
             report_path.parent.mkdir(parents=True, exist_ok=True)
             report_path.write_text(report, encoding="utf-8")
             print(f"报告: {report_path}")
+
+        if (
+            (bookshelf_summary.get("skippedDuplicateCount") or remain_groups)
+            and not args.verbose
+        ):
+            prompt_merge_duplicate_view(
+                bookshelf_summary,
+                remain_duplicates,
+                output_path.with_name(output_path.stem + "-重复书籍.txt"),
+            )
 
         return 0
     finally:
