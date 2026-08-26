@@ -619,6 +619,17 @@ def count_chapters(text: str) -> int:
     return sum(1 for line in text.splitlines() if line.strip())
 
 
+def sanitize_intro(text: str) -> str:
+    """正常简介中位数仅约 76 字符、P90 约 580 字符；超过 3000 字符的不可能是
+    正常简介，只会是章节目录缓存、接口 JSON、图片二进制、书源列表等串味
+    数据（实测最大 60 万字符），直接丢弃，不做内容形状识别。"""
+    if not text:
+        return ""
+    if len(text) > 3000:
+        return ""
+    return text
+
+
 def chapter_lines(text: str) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip()]
 
@@ -1007,7 +1018,7 @@ def row_to_book(
         cover_url = first_nonempty(meta.cover_url, db_cover)
         if cover_url:
             book["coverUrl"] = cover_url
-        intro = first_nonempty(meta.intro, db_intro)
+        intro = sanitize_intro(first_nonempty(meta.intro, db_intro))
         if intro:
             book["intro"] = intro
         if category:
@@ -1044,7 +1055,9 @@ def row_to_book(
     if db_cover:
         book["coverUrl"] = db_cover
     if db_intro:
-        book["intro"] = db_intro
+        intro = sanitize_intro(db_intro)
+        if intro:
+            book["intro"] = intro
     if local_kind:
         book["kind"] = local_kind
     return book
