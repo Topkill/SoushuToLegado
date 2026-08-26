@@ -143,7 +143,7 @@ sourceKey/.cover
 - `author`：`sourceKey/.author`
 - `intro`：`books.description`（mrbooks.db）。搜书大师的备份好像有 `bug`, 我实测其备份文件的`_names.lsit`索引里有些数据和其对应的`tag`文件里的实际内容对不上，比如索引里显示`tag`文件是`/.description`，查看`tag`文件实际内容里面却不是简介, 是章节列表. 因此不再使用`sourceKey/.description` . 对于intro, 超过 3000 字符的内容视为错误数据直接丢弃
 - `coverUrl`：`books.coverFile`（mrbooks.db），仅保留 http(s) 链接。`sourceKey/.cover`可能是搜书大师备份bug导致的脏数据（章节缓存、图片二进制），已不再使用
-- `latestChapterTitle`：`sourceKey/.latestc` 中 `序号*章节名` 的章节名
+- `latestChapterTitle`：**不再导出**。唯一数据源是`sourceKey/.latestc`（`序号*章节名`），但搜书大师的备份bug可能把章节缓存、封面 URL 等错误内容写进该文件，而 mrbooks.db 又没有任何最新章节字段可替代, 故不再导出；这些书换源后 legado 会自行重新获取最新章节
 - `totalChapterNum`：`sourceKey/.chapters` 的有效行数
 - `type`：`8`，即 legado-E 文本书
 
