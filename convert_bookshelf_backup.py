@@ -812,76 +812,62 @@ def build_dates_by_file(stats_rows: list[sqlite3.Row]) -> dict[str, int]:
 
 
 def wbpub_source_dir_candidates(backup: BackupFiles, filename: str) -> list[str]:
-    """List subdirectory names under the book dir that contain a .url companion."""
+    """List subdirectory names under the book dir holding companion data."""
     book_dir = posix_dirname(filename)
     prefix = f"{book_dir}/" if book_dir else ""
-    suffix = "/.url"
     found: set[str] = set()
     for real_name in backup.names_list:
-        if real_name.startswith(prefix) and real_name.endswith(suffix):
-            rel = real_name[len(prefix) : -len(suffix)]
-            if rel and "/" not in rel:
-                found.add(rel)
+        if not real_name.startswith(prefix):
+            continue
+        rel = real_name[len(prefix) :]
+        parts = rel.split("/", 1)
+        # Only nested paths count as a source subdir; root companions
+        # like .sources and the book's own .wbpub must be excluded.
+        if len(parts) == 2 and parts[0]:
+            found.add(parts[0])
     return sorted(found)
 
 
-BOOK_URL_RE = re.compile(r"https?://[^\s\"'<>#@*]+")
+def resolve_wbpub_source_key(backup: BackupFiles, filename: str) -> str:
+    """Resolve the current source key of a .wbpub book for metadata lookup.
 
-
-def looks_like_book_url(text: str) -> bool:
-    """Reject dirty companion .url content (chapter lists, prose, JSON...)."""
-    return bool(extract_book_url(text))
-
-
-def extract_book_url(text: str) -> str:
-    """Pull the first real http(s) URL out of a companion .url payload."""
-    if not text:
-        return ""
-    match = BOOK_URL_RE.search(text)
-    return match.group(0) if match else ""
-
-
-def select_wbpub_source(backup: BackupFiles, filename: str) -> tuple[str, str]:
-    """Pick (source_key, detail_url) for a .wbpub book.
-
-    App versions differ in what the .wbpub file stores: bare source key,
-    "name*key#url", JSON blobs, or unrelated text. Never trust the raw
-    content blindly: candidate keys are verified against subdirectories
-    that actually contain a .url companion, and the .url content must
-    look like a real URL before it is accepted.
+    App versions differ in what the .wbpub stores: bare source key,
+    "name*key#url", JSON blobs, or unrelated text. Candidate keys are
+    verified against subdirectories that actually exist; unresolved keys
+    fall back to the directory carrying the most complete companion data.
+    bookUrl itself is always a synthetic unique placeholder, so no URL
+    extraction is attempted here.
     """
     book_dir = posix_dirname(filename)
     dirs = wbpub_source_dir_candidates(backup, filename)
-    if not dirs:
-        return "", ""
-
     text = clean_text(read_companion_text(backup, filename))
-    prefs: list[str] = []
+    candidates: list[str] = []
     if text:
-        prefs.append(text)
+        candidates.append(text)
         tail = text.partition("#")[0].rpartition("*")[2].strip()
         mid = text.rpartition("*")[2].partition("#")[0].strip()
         for cand in (tail, mid):
-            if cand and cand not in prefs:
-                prefs.append(cand)
+            if cand and cand not in candidates:
+                candidates.append(cand)
 
-    ordered = [d for d in dirs if d in prefs] + [d for d in dirs if d not in prefs]
-    fallback_key = ""
-    for d in ordered:
-        raw_url_text = read_companion_text(backup, f"{book_dir}/{d}/.url")
-        url_text = extract_book_url(raw_url_text)
-        if url_text:
-            return d, url_text
-        if raw_url_text.strip() and not fallback_key:
-            fallback_key = d
-    # No valid URL anywhere: keep a display key only; caller synthesizes
-    # a placeholder bookUrl so rows never collapse on restore.
-    return fallback_key, ""
+    for cand in candidates:
+        if cand in dirs:
+            return cand
+
+    best = ""
+    best_rank: tuple[int, str] = (-1, "")
+    for d in dirs:
+        has_chapters = backup.read_bytes(f"{book_dir}/{d}/.chapters") is not None
+        rank = (1 if has_chapters else 0, d)
+        if rank > best_rank:
+            best_rank = rank
+            best = d
+    return best
 
 
 def read_wbpub_meta(backup: BackupFiles, filename: str) -> CompanionMeta:
     book_dir = posix_dirname(filename)
-    source_key, detail_url = select_wbpub_source(backup, filename)
+    source_key = resolve_wbpub_source_key(backup, filename)
     sources_text = read_companion_text(backup, f"{book_dir}/.sources")
     source_name = parse_source_name(sources_text, source_key)
     source_dir = f"{book_dir}/{source_key}" if source_key else book_dir
@@ -890,7 +876,6 @@ def read_wbpub_meta(backup: BackupFiles, filename: str) -> CompanionMeta:
     return CompanionMeta(
         source_key=source_key,
         source_name=source_name,
-        detail_url=detail_url,
         name=read_companion_text(backup, f"{source_dir}/.name"),
         author=read_companion_text(backup, f"{source_dir}/.author"),
         intro=read_companion_text(backup, f"{source_dir}/.description"),
@@ -1001,9 +986,11 @@ def row_to_book(
         # intro prefers companion description, then books.description.
         # bookUrl/origin/originName prefer companion, else empty.
         # coverUrl prefers companion .cover, then books.coverFile.
-        # bookUrl must be globally unique: legado uses it as the primary key,
-        # so empty/colliding URLs would collapse rows on restore.
-        book_url = clean_text(meta.detail_url) or f"ssds://wbpub/{sequence:05d}"
+        # bookUrl is always a unique placeholder: legado's books table uses
+        # it as the primary key, and soushu source URLs are unusable in
+        # legado anyway - placeholders also keep books out of the
+        # update-failure group since they are never refreshed.
+        book_url = f"ssds://wbpub/{sequence:05d}"
         book: dict[str, Any] = {
             "author": first_nonempty(db_author, meta.author, path_author),
             "bookUrl": book_url,
@@ -1117,10 +1104,13 @@ def write_report(
     groups: list[dict[str, Any]],
     search_history: list[dict[str, Any]],
     read_records: list[dict[str, Any]],
+    duplicate_groups: list[dict[str, Any]],
 ) -> None:
     wbpub_count = sum(1 for row in rows if is_wbpub_book(row))
     local_count = len(rows) - wbpub_count
     custom_groups = [group for group in groups if group["groupId"] > 0]
+    duplicate_total = sum(len(item["copies"]) for item in duplicate_groups)
+    duplicate_dedup = sum(len(item["copies"]) - 1 for item in duplicate_groups)
     lines = [
         "# 转换报告",
         "",
@@ -1134,6 +1124,8 @@ def write_report(
         f"- 阅读记录数量：{len(read_records)}",
         f"- .wbpub 书源书籍：{wbpub_count}",
         f"- 真正本地书籍：{local_count}",
+        f"- 同名同作者重复：{len(duplicate_groups)} 组 / {duplicate_total} 本"
+        f"（导入阅读后会被去重 {duplicate_dedup} 本）",
         "",
         "## 源书架对应的自定义分组",
         "",
@@ -1147,6 +1139,24 @@ def write_report(
         lines.append(
             f"- `{book['name']}`：group={book['group']}，origin=`{book['origin']}`，bookUrl=`{book['bookUrl']}`"
         )
+    if duplicate_groups:
+        dedup_count = sum(len(item["copies"]) - 1 for item in duplicate_groups)
+        total_count = sum(len(item["copies"]) for item in duplicate_groups)
+        lines.extend(
+            [
+                "",
+                "## 同名同作者重复书籍",
+                "",
+                f"- 共 {len(duplicate_groups)} 组 / {total_count} 本，"
+                f"导入阅读后会被去重 {dedup_count} 本",
+                "",
+            ]
+        )
+        for item in duplicate_groups:
+            author = item["author"] or "（无作者）"
+            lines.append(f"- `{item['name']}` / {author}")
+            for copy in item["copies"]:
+                lines.append(f"    - [{copy['shelf']}] `{copy['path']}`")
     if search_history:
         lines.extend(["", "## 搜索历史", ""])
         for item in search_history:
@@ -1229,6 +1239,27 @@ def run() -> int:
                 url = f"{url}#{suffix}"
                 book["bookUrl"] = url
             seen_book_urls.add(url)
+
+        # legado's books table also carries a UNIQUE(name, author) index, so
+        # same-name-same-author rows collapse to one on restore. Report them
+        # here so the shelf count after import matches expectations.
+        group_name_by_id = {group["groupId"]: group["groupName"] for group in groups}
+        by_name_author: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        for book, row in zip(books, rows):
+            key = (book["name"], book["author"])
+            by_name_author.setdefault(key, []).append(
+                {
+                    "path": str(row["filename"]),
+                    "shelf": group_name_by_id.get(book["group"], "?"),
+                }
+            )
+        duplicate_groups = [
+            {"name": name, "author": author, "copies": copies}
+            for (name, author), copies in sorted(by_name_author.items())
+            if len(copies) > 1
+        ]
+        duplicate_book_count = sum(len(item["copies"]) for item in duplicate_groups)
+        duplicate_dedup_count = sum(len(item["copies"]) - 1 for item in duplicate_groups)
         search_history = build_search_history(read_source_search_history(backup))
         read_records = build_read_records(
             stats_rows,
@@ -1248,6 +1279,7 @@ def run() -> int:
                 groups,
                 search_history,
                 read_records,
+                duplicate_groups,
             )
 
         wbpub_count = sum(1 for row in rows if is_wbpub_book(row))
@@ -1261,7 +1293,18 @@ def run() -> int:
         print(f"阅读记录: {len(read_records)}")
         print(f".wbpub书源书籍: {wbpub_count}")
         print(f"真正本地书籍: {len(books) - wbpub_count}")
-        print(f"无源URL占位书(需换源): {placeholder_count}")
+        print(f"占位URL网文书(需换源): {placeholder_count}")
+        if duplicate_groups:
+            print(
+                f"同名同作者重复: {len(duplicate_groups)} 组 / {duplicate_book_count} 本, "
+                f"导入阅读后会被去重 {duplicate_dedup_count} 本"
+            )
+        if args.verbose:
+            for item in duplicate_groups:
+                author = item["author"] or "（无作者）"
+                print(f"  重复: {item['name']} / {author}")
+                for copy in item["copies"]:
+                    print(f"    [{copy['shelf']}] {copy['path']}")
         if report_path:
             print(f"报告: {report_path}")
         if args.keep_temp:
