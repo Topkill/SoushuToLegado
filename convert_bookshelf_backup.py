@@ -140,7 +140,6 @@ class CompanionMeta:
     detail_url: str = ""
     name: str = ""
     author: str = ""
-    cover_url: str = ""
     latest_chapter_title: str = ""
     total_chapter_num: int = 0
     chapters_text: str = ""
@@ -876,14 +875,14 @@ def read_wbpub_meta(backup: BackupFiles, filename: str) -> CompanionMeta:
     source_dir = f"{book_dir}/{source_key}" if source_key else book_dir
 
     chapters = read_companion_text(backup, f"{source_dir}/.chapters")
-    # .latestc / .description 不再读取：搜书大师备份有bug，可能会把章节缓存、书源列表、
-    # 二进制等错误内容写进这些文件，不可信。简介只取 mrbooks.books.description。
+    # .latestc / .description / .cover 不再读取：搜书大师备份有bug，可能会把章节缓存、
+    # 书源列表、二进制图片等错误内容写进这些文件，不可信。
+    # 简介只取 mrbooks.books.description；封面只取 books.coverFile 的 http(s) 链接。
     return CompanionMeta(
         source_key=source_key,
         source_name=source_name,
         name=read_companion_text(backup, f"{source_dir}/.name"),
         author=read_companion_text(backup, f"{source_dir}/.author"),
-        cover_url=read_companion_text(backup, f"{source_dir}/.cover"),
         total_chapter_num=count_chapters(chapters),
         chapters_text=chapters,
     )
@@ -1012,7 +1011,7 @@ def row_to_book(
             "totalChapterNum": meta.total_chapter_num,
             "type": BOOK_TYPE_TEXT,
         }
-        cover_url = first_nonempty(meta.cover_url, db_cover)
+        cover_url = sanitize_cover_url(db_cover)
         if cover_url:
             book["coverUrl"] = cover_url
         intro = sanitize_intro(db_intro)
@@ -1050,7 +1049,9 @@ def row_to_book(
         "type": BOOK_TYPE_LOCAL_TEXT,
     }
     if db_cover:
-        book["coverUrl"] = db_cover
+        cover = sanitize_cover_url(db_cover)
+        if cover:
+            book["coverUrl"] = cover
     if db_intro:
         intro = sanitize_intro(db_intro)
         if intro:
@@ -1216,6 +1217,14 @@ def prompt_duplicate_view(
         txt_path.parent.mkdir(parents=True, exist_ok=True)
         txt_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         print(f"重复书籍已导出: {txt_path}")
+
+
+def sanitize_cover_url(text: str) -> str:
+    """封面只接受 http(s) 链接；伴随 .cover 与 DB 里可能出现的
+    章节缓存、二进制图片、书源 key 等串味内容一律丢弃。"""
+    if text.startswith(("http://", "https://")):
+        return text
+    return ""
 
 
 def run() -> int:
