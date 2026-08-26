@@ -615,13 +615,6 @@ def parse_source_name(text: str, source_key: str) -> str:
     return ""
 
 
-def parse_latest_title(text: str) -> str:
-    if not text:
-        return ""
-    _, sep, title = text.partition("*")
-    return title.strip() if sep else text.strip()
-
-
 def count_chapters(text: str) -> int:
     return sum(1 for line in text.splitlines() if line.strip())
 
@@ -873,6 +866,9 @@ def read_wbpub_meta(backup: BackupFiles, filename: str) -> CompanionMeta:
     source_dir = f"{book_dir}/{source_key}" if source_key else book_dir
 
     chapters = read_companion_text(backup, f"{source_dir}/.chapters")
+    # .latestc 不再读取：新版搜书大师常把整份章节缓存写进该文件，
+    # 解析出的"最新章节标题"可能有几十万字符，且这些书无可用书源、
+    # 换源后 legado 会重新获取最新章节，旧值没有保留价值。
     return CompanionMeta(
         source_key=source_key,
         source_name=source_name,
@@ -880,9 +876,6 @@ def read_wbpub_meta(backup: BackupFiles, filename: str) -> CompanionMeta:
         author=read_companion_text(backup, f"{source_dir}/.author"),
         intro=read_companion_text(backup, f"{source_dir}/.description"),
         cover_url=read_companion_text(backup, f"{source_dir}/.cover"),
-        latest_chapter_title=parse_latest_title(
-            read_companion_text(backup, f"{source_dir}/.latestc")
-        ),
         total_chapter_num=count_chapters(chapters),
         chapters_text=chapters,
     )
