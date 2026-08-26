@@ -134,9 +134,10 @@ sourceKey/.cover
 
 转换规则：
 
-- `bookUrl`：`sourceKey/.url`
+- `bookUrl`：一律使用唯一占位符 `ssds://wbpub/{序号}`。原因：legado 的 books 表以 `bookUrl` 为主键、并对 `(name, author)` 建了唯一索引，空值或重复冲突会在恢复备份时互相覆盖导致丢书；而搜书大师的书源在 legado 中本来也无法直接使用。早期版本曾写入 `sourceKey/.url` 文件原文，但新版 .wbpub 格式多变（`名称*key#url`、JSON、正文等），大量解析失败产生空值，导致阅读恢复备份时丢书, 该方案已废弃。
+- `sourceKey` 解析：从 `.wbpub` 内容提取候选 key 并与实际存在的子目录比对验证，未命中时回退到携带 `.chapters` 等伴随数据最完整的子目录（仅用于取元数据）
 - `tocUrl`：空字符串，源 `.wbpub` 伴随文件没有 legado 独立目录页 URL
-- `origin`：`.wbpub` 解压后的书源 key，例如 `jjwxc`、`faloo`
+- `origin`：解析出的书源 key，例如 `$$番茄小说`
 - `originName`：`.sources` 中的书源名
 - `name`：`sourceKey/.name`
 - `author`：`sourceKey/.author`
@@ -147,6 +148,8 @@ sourceKey/.cover
 - `type`：`8`，即 legado-E 文本书
 
 缺失字段按缺失输出，不从 `books` 表或其他伴随文件兜底。
+
+同名同作者的书**原样输出、不去重**：legado 恢复备份时会按 `(name, author)` 唯一索引自动只留一本，因此阅读恢复备份后的书架数量可能少于转换报告的数量。
 
 ### 真正导入的本地书（相对非本地书/网文书）
 
