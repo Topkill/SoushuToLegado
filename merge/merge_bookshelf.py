@@ -229,6 +229,9 @@ def merge_bookshelf(
     appended: list[dict[str, Any]] = []
     skipped_duplicates: list[dict[str, Any]] = []
     remapped_groups: list[dict[str, Any]] = []
+    existing_keys = set(seen_name_author)
+    skipped_existing_match_count = 0
+    skipped_import_duplicate_count = 0
 
     for index, raw in enumerate(imported_raw):
         if not isinstance(raw, dict):
@@ -241,7 +244,8 @@ def merge_bookshelf(
         old_group = as_int(book.get("group"), "group", default=0)
         new_group = remap_group(old_group, group_id_map)
 
-        if key in seen_name_author:
+        if key in existing_keys:
+            skipped_existing_match_count += 1
             skipped_duplicates.append(
                 {
                     "name": name,
@@ -251,6 +255,21 @@ def merge_bookshelf(
                     "oldGroup": old_group,
                     "remappedGroup": new_group,
                     "reason": "same name+author already exists in existing bookshelf",
+                }
+            )
+            continue
+
+        if key in seen_name_author:
+            skipped_import_duplicate_count += 1
+            skipped_duplicates.append(
+                {
+                    "name": name,
+                    "author": author,
+                    "importBookUrl": as_text(book.get("bookUrl")),
+                    "importOrigin": as_text(book.get("origin")),
+                    "oldGroup": old_group,
+                    "remappedGroup": new_group,
+                    "reason": "duplicate of an earlier import book",
                 }
             )
             continue
@@ -282,6 +301,8 @@ def merge_bookshelf(
         "importCount": len(imported_raw),
         "appendedCount": len(appended),
         "skippedDuplicateCount": len(skipped_duplicates),
+        "skippedExistingMatchCount": skipped_existing_match_count,
+        "skippedImportDuplicateCount": skipped_import_duplicate_count,
         "groupBitsRemappedCount": len(remapped_groups),
         "skippedDuplicates": skipped_duplicates,
         "appendedBooks": [

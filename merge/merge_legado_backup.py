@@ -234,8 +234,15 @@ def build_report(
             "",
             f"- 现有书籍：{bookshelf_summary.get('existingCount', 0)}",
             f"- 导入扫描：{bookshelf_summary.get('importCount', 0)}",
+            f"- 去除同名同作者：{bookshelf_summary.get('skippedDuplicateCount', 0)} 本"
+            f"（与现有重名 {bookshelf_summary.get('skippedExistingMatchCount', 0)} 本，"
+            f"组内副本 {bookshelf_summary.get('skippedImportDuplicateCount', 0)} 本）",
+            f"- 源数据含重复：{bookshelf_summary.get('importDuplicateGroups', 0)} 组"
+            f"/{bookshelf_summary.get('importDuplicateBooks', 0)} 本",
             f"- 追加：{bookshelf_summary.get('appendedCount', 0)}",
-            f"- 跳过同名同作者：{bookshelf_summary.get('skippedDuplicateCount', 0)}",
+            f"- 合并后一共：{bookshelf_summary.get('mergedCount', 0)} 本",
+            f"- 合并结果同名同作者：{bookshelf_summary.get('remainingDuplicateGroups', 0)} 组"
+            f"（导入阅读后会被去重 {bookshelf_summary.get('remainingDuplicateCount', 0)} 本）",
             "",
         ]
     )
@@ -273,6 +280,7 @@ def build_report(
             "- 本地书只迁移书架记录，不迁移文件本身。",
             "- 搜书网文书通常没有可用 Legado 书源，可能需要换源。",
             "- 同名同作者导入书会跳过，以现有 Legado 为准。",
+            "- legado 对书名+作者有唯一索引，合并结果里若仍有同名同作者的书，导入阅读后也会被去重。",
             "",
         ]
     )
@@ -412,6 +420,32 @@ def main() -> int:
         after_count, after_ms = reading_stats(merged_read)
         dropped_existing = len(existing_read) - before_count
 
+        # legado 对 (name, author) 有唯一索引，合并结果里若仍存在同名同作者
+        # 的书，导入阅读后会被 App 再去重一次。这里统计给用户预期。
+        remain_na: dict[tuple[str, str], int] = {}
+        for book in merged_books:
+            key = (book["name"], book["author"])
+            remain_na[key] = remain_na.get(key, 0) + 1
+        remain_groups = sum(1 for count in remain_na.values() if count > 1)
+        remain_total = sum(count for count in remain_na.values() if count > 1)
+        remain_dedup = sum(count - 1 for count in remain_na.values() if count > 1)
+        bookshelf_summary["remainingDuplicateGroups"] = remain_groups
+        bookshelf_summary["remainingDuplicateCount"] = remain_dedup
+        bookshelf_summary["mergedCount"] = len(merged_books)
+
+        # 导入备份内部的同名同作者重复（转换脚本不去重，原样保留）。
+        import_na: dict[tuple[str, str], int] = {}
+        for book in import_books:
+            key = (
+                str(book.get("name") or "").strip(),
+                str(book.get("author") or "").strip(),
+            )
+            import_na[key] = import_na.get(key, 0) + 1
+        import_dup_groups = sum(1 for count in import_na.values() if count > 1)
+        import_dup_total = sum(count for count in import_na.values() if count > 1)
+        bookshelf_summary["importDuplicateGroups"] = import_dup_groups
+        bookshelf_summary["importDuplicateBooks"] = import_dup_total
+
         print(f"现有备份: {existing_path}")
         print(f"导入备份: {import_path}")
         print(f"输出文件: {output_path}")
@@ -421,22 +455,33 @@ def main() -> int:
             f"共 {len(merged_groups)} 个"
         )
         print(
-            f"书架: 现有 {len(existing_books)} 本, "
-            f"新增 {bookshelf_summary['appendedCount']} 本, "
-            f"跳过重复 {bookshelf_summary['skippedDuplicateCount']} 本, "
-            f"共 {len(merged_books)} 本"
+            f"书架: 现有 {len(existing_books)} 本 "
+            f"+ 实际新增 {bookshelf_summary['appendedCount']} 本"
+            f"（导入 {bookshelf_summary['importCount']} 本，"
+            f"去除重复的同名同作者 {bookshelf_summary['skippedDuplicateCount']} 本 "
+            f"= 导入备份与现有备份重复 {bookshelf_summary['skippedExistingMatchCount']} 本"
+            f" + 导入备份内重复 {bookshelf_summary['skippedImportDuplicateCount']} 本；"
+            f"含重复 {import_dup_groups} 组/{import_dup_total} 本）"
+            f" = 合并后一共 {len(merged_books)} 本"
+        )
+        if remain_groups:
+            print(
+                f"提示: 合并结果仍含同名同作者 {remain_groups} 组 / {remain_total} 本, "
+                f"导入阅读后会被去重 {remain_dedup} 本"
+            )
+        print(
+            f"搜索历史: 现有 {len(existing_search)} 条 "
+            f"+ 实际新增 {search_summary['appendedCount']} 条"
+            f"（导入 {len(import_search)} 条，"
+            f"去除重复 {search_summary['skippedDuplicateCount']} 条）"
+            f" = 一共 {len(merged_search)} 条"
         )
         print(
-            f"搜索历史: 现有 {len(existing_search)} 条, "
-            f"新增 {search_summary['appendedCount']} 条, "
-            f"跳过重复 {search_summary['skippedDuplicateCount']} 条, "
-            f"共 {len(merged_search)} 条"
-        )
-        print(
-            f"阅读记录: 合并前 {before_count} 本, "
-            f"新增 {read_summary['appendedCount']} 本, "
-            f"同名合并 {read_summary['mergedSameNameCount']} 本, "
-            f"合并后 {after_count} 本"
+            f"阅读记录: 合并前 {before_count} 本 "
+            f"+ 实际新增 {read_summary['appendedCount']} 本"
+            f"（导入 {read_summary['importRowsScanned']} 本，"
+            f"其中同名 {read_summary['mergedSameNameCount']} 本并入现有记录）"
+            f" = 合并后 {after_count} 本"
         )
         print(
             f"阅读时长: 合并前 {format_duration(before_ms)} ({before_ms:,} 毫秒), "
