@@ -140,7 +140,6 @@ class CompanionMeta:
     detail_url: str = ""
     name: str = ""
     author: str = ""
-    intro: str = ""
     cover_url: str = ""
     latest_chapter_title: str = ""
     total_chapter_num: int = 0
@@ -877,15 +876,13 @@ def read_wbpub_meta(backup: BackupFiles, filename: str) -> CompanionMeta:
     source_dir = f"{book_dir}/{source_key}" if source_key else book_dir
 
     chapters = read_companion_text(backup, f"{source_dir}/.chapters")
-    # .latestc 不再读取：新版搜书大师常把整份章节缓存写进该文件，
-    # 解析出的"最新章节标题"可能有几十万字符，且这些书无可用书源、
-    # 换源后 legado 会重新获取最新章节，旧值没有保留价值。
+    # .latestc / .description 不再读取：搜书大师备份有bug，可能会把章节缓存、书源列表、
+    # 二进制等错误内容写进这些文件，不可信。简介只取 mrbooks.books.description。
     return CompanionMeta(
         source_key=source_key,
         source_name=source_name,
         name=read_companion_text(backup, f"{source_dir}/.name"),
         author=read_companion_text(backup, f"{source_dir}/.author"),
-        intro=read_companion_text(backup, f"{source_dir}/.description"),
         cover_url=read_companion_text(backup, f"{source_dir}/.cover"),
         total_chapter_num=count_chapters(chapters),
         chapters_text=chapters,
@@ -987,9 +984,9 @@ def row_to_book(
         meta = read_wbpub_meta(backup, filename)
         # Field priority (user-confirmed):
         # name/author prefer mrbooks.books, then companion, then path.
-        # intro prefers companion description, then books.description.
-        # bookUrl/origin/originName prefer companion, else empty.
-        # coverUrl prefers companion .cover, then books.coverFile.
+        # intro uses books.description only: companion .description is
+        # unreliable across app versions (chapter caches, source lists,
+        # binary blobs get written into it).
         # bookUrl is always a unique placeholder: legado's books table uses
         # it as the primary key, and soushu source URLs are unusable in
         # legado anyway - placeholders also keep books out of the
@@ -1018,7 +1015,7 @@ def row_to_book(
         cover_url = first_nonempty(meta.cover_url, db_cover)
         if cover_url:
             book["coverUrl"] = cover_url
-        intro = sanitize_intro(first_nonempty(meta.intro, db_intro))
+        intro = sanitize_intro(db_intro)
         if intro:
             book["intro"] = intro
         if category:
